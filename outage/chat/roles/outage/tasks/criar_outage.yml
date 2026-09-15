@@ -14,9 +14,9 @@
 - name: Localizar ativos no Dynatrace
   ansible.builtin.uri:
     url: >-
-      {{ dynatrace_url }}/api/v2/entities
-      ?entitySelector=type(HOST),entityName.equals("{{ item }}")
-      &pageSize=100
+      {{ (dynatrace_url | regex_replace('/+$', ''))
+      ~ '/api/v2/entities?entitySelector=type(HOST),entityName.equals(%22'
+      ~ item ~ '%22)&pageSize=100' }}
     method: GET
     headers:
       Authorization: "Api-Token {{ dynatrace_token }}"
