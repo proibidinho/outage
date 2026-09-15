@@ -24,7 +24,7 @@
     status_code: 200
   loop: "{{ gmud.ativos }}"
   register: dynatrace_busca
-  no_log: true
+  no_log: false
   loop_control:
     label: "{{ item }}"
   failed_when: false
@@ -41,7 +41,7 @@
         )
       }}
   loop: "{{ dynatrace_busca.results }}"
-  no_log: true
+  no_log: false
 
 - name: Definir se a GMUD é válida para criação da Maintenance Window
   ansible.builtin.set_fact:
@@ -97,7 +97,7 @@
       - 200
       - 201
   register: outage_result
-  no_log: true
+  no_log: false
   when: gmud_valida
 
 - name: Informar resultado
