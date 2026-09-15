@@ -1,0 +1,21 @@
+---
+jira_base_url: "https://clarobr.atlassian.net"
+
+projeto_jira: "GML"
+
+executante_alvo: "OBSERVABILIDADE(APR)"
+
+# Campos da GMUD
+jira_ativos_field: "customfield_16348"
+jira_inicio_field: "customfield_14318"
+jira_fim_field: "customfield_14319"
+
+# Proxy
+http_proxy_url: "http://10.29.177.37:8080"
+https_proxy_url: "http://10.29.177.37:8080"
+
+proxy_env:
+  http_proxy: "{{ http_proxy_url }}"
+  https_proxy: "{{ https_proxy_url }}"
+  HTTP_PROXY: "{{ http_proxy_url }}"
+  HTTPS_PROXY: "{{ https_proxy_url }}"
