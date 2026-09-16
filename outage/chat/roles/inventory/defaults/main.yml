@@ -1,0 +1,14 @@
+---
+zabbix_habilitado: true
+ 
+zabbix_host: ""
+zabbix_url_path: "zabbix"
+zabbix_port: 443
+zabbix_use_ssl: true
+zabbix_validate_certs: false
+zabbix_user: ""
+zabbix_password: ""
+ 
+# Nome do host virtual usado nos delegate_to da role "outage".
+zabbix_inventory_host: "zabbix_api"
+ 

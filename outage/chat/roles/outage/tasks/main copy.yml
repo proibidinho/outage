@@ -1,18 +1,24 @@
 ---
-# Esta role recebe "gmuds" da role descoberta.
-# Para cada GMUD:
-#   1. Localiza os ativos no Dynatrace.
-#   2. Garante que todos foram encontrados.
-#   3. Cria/valida a Maintenance Window.
-
 - name: Verificar se há GMUDs para processar
   ansible.builtin.debug:
     msg: "Nenhuma GMUD de Observabilidade encontrada."
   when: gmuds | default([]) | length == 0
 
-- name: Processar GMUDs
+# O Dynatrace roda sempre, independente do Zabbix estar habilitado
+# ou não. Uma GMUD pode existir só no Dynatrace, só no Zabbix, ou
+# nos dois — cada bloco decide por conta própria (gmud_valida /
+# gmud_valida_zabbix), sem depender do resultado do outro.
+- name: Processar GMUDs no Dynatrace
   ansible.builtin.include_tasks: criar_outage.yml
   loop: "{{ gmuds | default([]) }}"
   loop_control:
     loop_var: gmud
     label: "{{ gmud.chave }}"
+
+- name: Processar GMUDs no Zabbix
+  ansible.builtin.include_tasks: criar_outage_zabbix.yml
+  loop: "{{ gmuds | default([]) }}"
+  loop_control:
+    loop_var: gmud
+    label: "{{ gmud.chave }}"
+  when: zabbix_habilitado

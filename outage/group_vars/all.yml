@@ -1,0 +1,19 @@
+# ---------- Zabbix ----------
+# Se false, a role "inventory" não cria o host virtual e a role
+# "outage" pula completamente as tasks do Zabbix. O Dynatrace
+# continua rodando normalmente.
+zabbix_habilitado: true
+ 
+zabbix_host: "zabbix.claro.com.br"     # só o hostname, sem https://
+zabbix_url_path: "zabbix"              # vazio "" se o Zabbix está na raiz
+zabbix_port: 443
+zabbix_use_ssl: true
+zabbix_validate_certs: false
+zabbix_user: ""
+zabbix_password: ""                    # vem do AAP (credential)
+ 
+zabbix_inventory_host: "zabbix_api"    # nome do host virtual (add_host)
+ 
+zabbix_validate_only: true
+zabbix_usar_visible_name: false
+zabbix_collect_data: true

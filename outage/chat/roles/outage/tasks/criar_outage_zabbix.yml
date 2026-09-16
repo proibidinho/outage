@@ -1,0 +1,101 @@
+---
+# Recebe a variável "gmud" (loop_var definido em main.yml).
+# Só é incluída quando zabbix_habilitado for true (ver main.yml).
+
+- name: Converter janela da GMUD para o formato do Zabbix
+  ansible.builtin.set_fact:
+    zbx_inicio: >-
+      {{ (gmud.inicio | to_datetime('%Y-%m-%dT%H:%M:%S.%f%z')).strftime('%Y-%m-%d %H:%M') }}
+    zbx_fim: >-
+      {{ (gmud.fim | to_datetime('%Y-%m-%dT%H:%M:%S.%f%z')).strftime('%Y-%m-%d %H:%M') }}
+    zbx_minutos: >-
+      {{ ((
+            (gmud.fim   | to_datetime('%Y-%m-%dT%H:%M:%S.%f%z'))
+          - (gmud.inicio | to_datetime('%Y-%m-%dT%H:%M:%S.%f%z'))
+         ).total_seconds() / 60) | round | int }}
+
+- name: Validar duração da janela
+  ansible.builtin.assert:
+    that:
+      - zbx_minutos | int > 0
+    fail_msg: >-
+      GMUD {{ gmud.chave }}: janela inválida
+      ({{ gmud.inicio }} -> {{ gmud.fim }}).
+
+- name: Localizar ativos no Zabbix
+  community.zabbix.zabbix_host_info:
+    host_name: "{{ item }}"
+    exact_match: true
+  loop: "{{ gmud.ativos }}"
+  loop_control:
+    label: "{{ item }}"
+  delegate_to: "{{ zabbix_inventory_host }}"
+  register: zbx_busca
+  failed_when: false
+
+- name: Montar lista de hosts encontrados
+  ansible.builtin.set_fact:
+    zbx_hosts: >-
+      {{
+        zbx_busca.results
+        | selectattr('hosts', 'defined')
+        | map(attribute='hosts')
+        | flatten
+        | map(attribute='host')
+        | unique
+        | list
+      }}
+
+- name: Definir se a GMUD é válida para o Zabbix
+  ansible.builtin.set_fact:
+    gmud_valida_zabbix: "{{ zbx_hosts | length == gmud.ativos | length }}"
+
+- name: Informar GMUD ignorada por ativo não encontrado no Zabbix
+  ansible.builtin.debug:
+    msg: >-
+      GMUD {{ gmud.chave }} ignorada no Zabbix: esperados
+      {{ gmud.ativos | length }} ativos, encontrados {{ zbx_hosts | length }}
+      ({{ zbx_hosts | join(', ') }}). Nenhuma maintenance será criada.
+  when: not gmud_valida_zabbix
+
+- name: Mostrar o que será colocado em manutenção no Zabbix
+  ansible.builtin.debug:
+    msg:
+      gmud: "{{ gmud.chave }}"
+      nome_maintenance: "GMUD {{ gmud.chave }}"
+      inicio: "{{ zbx_inicio }}"
+      fim: "{{ zbx_fim }}"
+      duracao_minutos: "{{ zbx_minutos }}"
+      hosts: "{{ zbx_hosts }}"
+  when: gmud_valida_zabbix
+
+- name: Criar maintenance no Zabbix
+  community.zabbix.zabbix_maintenance:
+    state: present
+    name: "GMUD {{ gmud.chave }}"
+    desc: >-
+      Outage automático para a GMUD {{ gmud.chave }} - {{ gmud.resumo }}
+    host_names: "{{ zbx_hosts }}"
+    visible_name: "{{ zabbix_usar_visible_name }}"
+    collect_data: "{{ zabbix_collect_data }}"
+    active_since: "{{ zbx_inicio }}"
+    active_till: "{{ zbx_fim }}"
+    minutes: "{{ zbx_minutos }}"
+  delegate_to: "{{ zabbix_inventory_host }}"
+  environment: "{{ proxy_env }}"
+  register: zbx_maintenance
+  when:
+    - gmud_valida_zabbix
+    - not zabbix_validate_only
+
+- name: Informar resultado do Zabbix
+  ansible.builtin.debug:
+    msg:
+      gmud: "{{ gmud.chave }}"
+      resultado: >-
+        {{
+          'VALIDAÇÃO OK - nenhuma maintenance foi criada'
+          if zabbix_validate_only
+          else 'Maintenance criada/atualizada no Zabbix'
+        }}
+  when: gmud_valida_zabbix
