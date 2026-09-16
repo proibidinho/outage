@@ -15,19 +15,25 @@
   ansible.builtin.uri:
     url: >-
       {{ (dynatrace_url | regex_replace('/+$', ''))
-      ~ '/api/v2/entities?entitySelector=type(HOST),entityName.equals(%22'
-      ~ item ~ '%22)&pageSize=100' }}
+      ~ '/api/v2/entities?entitySelector=type(HOST),entityName.contains(%22'
+      ~ item
+      ~ '%22)&pageSize=100' }}
     method: GET
     headers:
       Authorization: "Api-Token {{ dynatrace_token }}"
       Accept: application/json
     status_code: 200
   loop: "{{ gmud.ativos }}"
+  environment: "{{ proxy_env }}"
   register: dynatrace_busca
-  no_log: false
+  no_log: true
   loop_control:
     label: "{{ item }}"
   failed_when: false
+
+- name: Debug busca Dynatrace
+  ansible.builtin.debug:
+    var: dynatrace_busca.results
 
 - name: Montar lista de Entity IDs
   ansible.builtin.set_fact:
@@ -36,12 +42,16 @@
         dynatrace_entities +
         (
           item.json.entities | default([])
-          | map(attribute='entityId.id')
+          | map(attribute='entityId')
           | list
         )
       }}
   loop: "{{ dynatrace_busca.results }}"
   no_log: false
+
+- name: Debug entidades encontradas
+  ansible.builtin.debug:
+    var: dynatrace_entities
 
 - name: Definir se a GMUD é válida para criação da Maintenance Window
   ansible.builtin.set_fact:
@@ -66,7 +76,10 @@
 
 - name: Criar ou validar Maintenance Window
   ansible.builtin.uri:
-    url: "{{ dynatrace_url }}/api/v2/settings/objects?validateOnly={{ dynatrace_validate_only | lower }}"
+    url: >-
+      {{ (dynatrace_url | regex_replace('/+$', ''))
+      ~ '/api/v2/settings/objects?validateOnly='
+      ~ (dynatrace_validate_only | string | lower) }}
     method: POST
     headers:
       Authorization: "Api-Token {{ dynatrace_token }}"
@@ -78,24 +91,32 @@
         scope: "environment"
         value:
           enabled: true
+
           generalProperties:
             name: "GMUD {{ gmud.chave }}"
             description: >-
               Outage automático para a GMUD {{ gmud.chave }} -
               {{ gmud.resumo }}
+
+            maintenanceType: "PLANNED"
+            suppression: "DETECT_PROBLEMS_AND_ALERT"
+            disableSyntheticMonitorExecution: false
+
           schedule:
             scheduleType: "ONCE"
             onceRecurrence:
-              startTime: "{{ gmud.inicio }}"
-              endTime: "{{ gmud.fim }}"
+              startTime: "{{ gmud.inicio | regex_replace('\\.000-0300$', '') }}"
+              endTime: "{{ gmud.fim | regex_replace('\\.000-0300$', '') }}"
               timeZone: "{{ dynatrace_timezone }}"
+
           filters:
             - entityType: "HOST"
-              entityId:
-                "{{ dynatrace_entities | join(',') }}"
+              entityId: "{{ dynatrace_entities | first }}"
     status_code:
       - 200
       - 201
+      - 207
+  environment: "{{ proxy_env }}"
   register: outage_result
   no_log: false
   when: gmud_valida
