@@ -11,7 +11,7 @@
 
 - name: Ajuste do resolv.conf
   hosts: unix
-  gather_facts: false
+  gather_facts: falses
 
   tasks:
 
@@ -35,9 +35,18 @@
             | default('Unknown OS')
           }}
 
+    - name: Identificando familia Red Hat (Red Hat / CentOS / Oracle Linux)
+      ansible.builtin.set_fact:
+        rhel_family: >-
+          {{
+            detected_os_info is search('Red Hat')
+            or detected_os_info is search('CentOS')
+            or detected_os_info is search('Oracle')
+          }}
+
     - name: Exibindo informações do sistema operacional
       ansible.builtin.debug:
-        msg: "Sistema Operacional Detectado: {{ detected_os_info }}"
+        msg: "Sistema Operacional Detectado: {{ detected_os_info }} | Familia Red Hat: {{ rhel_family }}"
   
     #Datacenter Mackenzie
     - name: Aplicando tasks em sistemas Red Hat
@@ -58,10 +67,10 @@
       when: conexao == 'validation' and datacenter == 'Campinas'
 
     #Datacenter Mackenzie
-    - name: Aplicando tasks em sistemas Red Hat 
+    - name: Aplicando tasks em sistemas Red Hat / CentOS / Oracle Linux
       include_role:
         name: rhel_mck
-      when: detected_os_info is search('Red Hat') and conexao == 'deploy' and datacenter == 'Mackenzie'
+      when: rhel_family and conexao == 'deploy' and datacenter == 'Mackenzie'
 
     - name: Aplicando tasks em sistemas SunOS 
       include_role:
@@ -69,10 +78,10 @@
       when: detected_os_info is search('SunOS') and conexao == 'deploy' and datacenter == 'Mackenzie'
 
     #Datacenter Lapa
-    - name: Aplicando tasks em sistemas Red Hat 
+    - name: Aplicando tasks em sistemas Red Hat / CentOS / Oracle Linux
       include_role:
         name: rhel_lapa
-      when: detected_os_info is search('Red Hat') and conexao == 'deploy' and datacenter == 'Lapa'
+      when: rhel_family and conexao == 'deploy' and datacenter == 'Lapa'
 
     - name: Aplicando tasks em sistemas SunOS 
       include_role:
@@ -80,10 +89,10 @@
       when: detected_os_info is search('SunOS') and conexao == 'deploy' and datacenter == 'Lapa'
 
     #Datacenter Campinas
-    - name: Aplicando tasks em sistemas Red Hat 
+    - name: Aplicando tasks em sistemas Red Hat / CentOS / Oracle Linux
       include_role:
         name: rhel_cpa
-      when: detected_os_info is search('Red Hat') and conexao == 'deploy' and datacenter == 'Campinas'
+      when: rhel_family and conexao == 'deploy' and datacenter == 'Campinas'
 
     - name: Aplicando tasks em sistemas SunOS 
       include_role:
@@ -91,12 +100,14 @@
       when: detected_os_info is search('SunOS') and conexao == 'deploy' and datacenter == 'Campinas'
 
     #Rollback todods os datacenters
-    - name: Aplicando tasks em sistemas Red Hat 
+    - name: Aplicando tasks em sistemas Red Hat / CentOS / Oracle Linux
       include_role:
         name: rhel_rollback
-      when: detected_os_info is search('Red Hat') and conexao == 'rollback'
+      when: rhel_family and conexao == 'rollback'
 
     - name: Aplicando tasks em sistemas SunOS 
       include_role:
         name: sunos_rollback
       when: detected_os_info is search('SunOS') and conexao == 'rollback'
+
+#family
