@@ -1,0 +1,2351 @@
+============================================================
+ARQUIVO: ./infoblox.yaml
+============================================================
+---
+- name: Adicionando o servidor ao inventory
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+
+    - name: Adicionando a lista de servidores ao inventory
+      include_role:
+        name: inventory
+
+- name: Ajuste do resolv.conf
+  hosts: unix
+  gather_facts: false
+
+  tasks:
+
+    - name: informar a RDM
+      ansible.builtin.debug:
+        msg: "RMD número {{ rdm }} prosseguindo com a execução"
+      run_once: true
+      delegate_to: localhost
+
+    - name: Extraindo informações do sistema operacional
+      ansible.builtin.raw: 
+        bash -c 'cat /etc/redhat-release 2>/dev/null || cat /etc/system-release 2>/dev/null || uname -s 2>/dev/null'
+      register: so_info
+      changed_when: false 
+
+    - name: Convertendo informações do sistema operacional para uma variável
+      ansible.builtin.set_fact:
+        detected_os_info: >-
+          {{
+            (so_info.stdout_lines | select('search', '.*(Red Hat|Oracle|Sun|SUSE|HP-UX|Ubuntu|AIX|CentOS|Debian).*') | list | first)
+            | default('Unknown OS')
+          }}
+
+    - name: Exibindo informações do sistema operacional
+      ansible.builtin.debug:
+        msg: "Sistema Operacional Detectado: {{ detected_os_info }}"
+  
+    #Datacenter Mackenzie
+    - name: Aplicando tasks em sistemas Red Hat
+      include_role:
+        name: dns_mck
+      when: conexao == 'validation' and datacenter == 'Mackenzie'
+
+    #Datacenter Lapa
+    - name: Aplicando tasks em sistemas Red Hat
+      include_role:
+        name: dns_lapa
+      when: conexao == 'validation' and datacenter == 'Lapa'
+
+    #Datacenter Campinas
+    - name: Aplicando tasks em sistemas Red Hat
+      include_role:
+        name: dns_cpa
+      when: conexao == 'validation' and datacenter == 'Campinas'
+
+    #Datacenter Mackenzie
+    - name: Aplicando tasks em sistemas Red Hat 
+      include_role:
+        name: rhel_mck
+      when: detected_os_info is search('Red Hat') and conexao == 'deploy' and datacenter == 'Mackenzie'
+
+    - name: Aplicando tasks em sistemas SunOS 
+      include_role:
+        name: sunos_mck
+      when: detected_os_info is search('SunOS') and conexao == 'deploy' and datacenter == 'Mackenzie'
+
+    #Datacenter Lapa
+    - name: Aplicando tasks em sistemas Red Hat 
+      include_role:
+        name: rhel_lapa
+      when: detected_os_info is search('Red Hat') and conexao == 'deploy' and datacenter == 'Lapa'
+
+    - name: Aplicando tasks em sistemas SunOS 
+      include_role:
+        name: sunos_lapa
+      when: detected_os_info is search('SunOS') and conexao == 'deploy' and datacenter == 'Lapa'
+
+    #Datacenter Campinas
+    - name: Aplicando tasks em sistemas Red Hat 
+      include_role:
+        name: rhel_cpa
+      when: detected_os_info is search('Red Hat') and conexao == 'deploy' and datacenter == 'Campinas'
+
+    - name: Aplicando tasks em sistemas SunOS 
+      include_role:
+        name: sunos_cpa
+      when: detected_os_info is search('SunOS') and conexao == 'deploy' and datacenter == 'Campinas'
+
+    #Rollback todods os datacenters
+    - name: Aplicando tasks em sistemas Red Hat 
+      include_role:
+        name: rhel_rollback
+      when: detected_os_info is search('Red Hat') and conexao == 'rollback'
+
+    - name: Aplicando tasks em sistemas SunOS 
+      include_role:
+        name: sunos_rollback
+      when: detected_os_info is search('SunOS') and conexao == 'rollback'
+
+
+============================================================
+ARQUIVO: ./roles/dns_cpa/tasks/main.yaml
+============================================================
+- name: Testando conexão na porta 53 com o IP 10.54.44.12
+  ansible.builtin.raw: |
+    for ip in 10.54.44.12; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=`echo quit | telnet $ip 53 2>/dev/null`
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=`dig @$ip google.com +time=2 +tries=1`
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=`nmap -p 53 -Pn --host-timeout 5s $ip`
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_one
+
+- name: Testando conexão na porta 53 com o IP 10.29.177.82
+  ansible.builtin.raw: |
+    for ip in 10.29.177.82; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=`echo quit | telnet $ip 53 2>/dev/null`
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=`dig @$ip google.com +time=2 +tries=1`
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=`nmap -p 53 -Pn --host-timeout 5s $ip`
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_two
+
+# - name: Validando os servidores que comunicaram com sucesso na porta 53
+#   ansible.builtin.set_fact:
+#     dns_one_falha: "{{ dns_one.stdout_lines | select('search', 'FALHA') | list | length > 0 }}"
+#     dns_two_falha: "{{ dns_two.stdout_lines | select('search', 'FALHA') | list | length > 0 }}"
+
+# - name: Lista de servidores que falharam na conexão com a porta 53
+#   ansible.builtin.debug:
+#     msg: "❌ Porta 53 não acessível. Favor solicitar regra de firewall."
+#   when: dns_one_falha or dns_two_falha
+
+- name: Validando os servidores que comunicaram com sucesso na porta 53
+  ansible.builtin.set_fact:
+    dns_one_ok: "{{ dns_one.stdout_lines | select('search', 'OK') | list | length > 0 }}" 
+    dns_two_ok: "{{ dns_two.stdout_lines | select('search', 'OK') | list | length > 0 }}"
+
+- name: Lista de servidores que falharam na conexão com a porta 53
+  ansible.builtin.fail:
+    msg: "❌ Porta 53 não acessível. Favor solicitar regra de firewall."
+  when: dns_one_ok == false or dns_two_ok == false
+
+- name: Lista de servidores que comunicaram com a porta 53
+  ansible.builtin.debug:
+    msg: "✅ Porta 53 comunidando."
+  when: dns_one_ok == true and dns_two_ok == true
+
+
+============================================================
+ARQUIVO: ./roles/dns_lapa/tasks/main.yaml
+============================================================
+- name: Testando conexão na porta 53 com o IP 10.29.177.81
+  ansible.builtin.raw: |
+    for ip in 10.29.177.81; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=`echo quit | telnet $ip 53 2>/dev/null`
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=`dig @$ip google.com +time=2 +tries=1`
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=`nmap -p 53 -Pn --host-timeout 5s $ip`
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_one
+
+- name: Testando conexão na porta 53 com o IP 10.53.22.102
+  ansible.builtin.raw: |
+    for ip in 10.53.22.102; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=`echo quit | telnet $ip 53 2>/dev/null`
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=`dig @$ip google.com +time=2 +tries=1`
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=`nmap -p 53 -Pn --host-timeout 5s $ip`
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_two
+
+- name: Validando os servidores que comunicaram com sucesso na porta 53
+  ansible.builtin.set_fact:
+    dns_one_ok: "{{ dns_one.stdout_lines | select('search', 'OK') | list | length > 0 }}" 
+    dns_two_ok: "{{ dns_two.stdout_lines | select('search', 'OK') | list | length > 0 }}"
+
+- name: Lista de servidores que falharam na conexão com a porta 53
+  ansible.builtin.fail:
+    msg: "❌ Porta 53 não acessível. Favor solicitar regra de firewall."
+  when: dns_one_ok == false or dns_two_ok == false
+
+- name: Lista de servidores que comunicaram com a porta 53
+  ansible.builtin.debug:
+    msg: "✅ Porta 53 comunidando."
+  when: dns_one_ok == true and dns_two_ok == true
+
+
+============================================================
+ARQUIVO: ./roles/dns_mck/tasks/main.yaml
+============================================================
+- name: Testando conexão na porta 53 com o IP 10.54.44.13
+  ansible.builtin.raw: |
+    for ip in 10.54.44.13; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=`echo quit | telnet $ip 53 2>/dev/null`
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=`dig @$ip google.com +time=2 +tries=1`
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=`nmap -p 53 -Pn --host-timeout 5s $ip`
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_one
+
+- name: Testando conexão na porta 53 com o IP 10.53.22.101
+  ansible.builtin.raw: |
+    for ip in 10.53.22.101; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=`echo quit | telnet $ip 53 2>/dev/null`
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=`dig @$ip google.com +time=2 +tries=1`
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=`nmap -p 53 -Pn --host-timeout 5s $ip`
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_two
+
+- name: Validando os servidores que comunicaram com sucesso na porta 53
+  ansible.builtin.set_fact:
+    dns_one_ok: "{{ dns_one.stdout_lines | select('search', 'OK') | list | length > 0 }}" 
+    dns_two_ok: "{{ dns_two.stdout_lines | select('search', 'OK') | list | length > 0 }}"
+
+- name: Lista de servidores que falharam na conexão com a porta 53
+  ansible.builtin.fail:
+    msg: "❌ Porta 53 não acessível. Favor solicitar regra de firewall."
+  when: dns_one_ok == false or dns_two_ok == false
+
+- name: Lista de servidores que comunicaram com a porta 53
+  ansible.builtin.debug:
+    msg: "✅ Porta 53 comunidando."
+  when: dns_one_ok == true and dns_two_ok == true
+
+
+# - name: Validando os servidores que comunicaram com sucesso na porta 53
+#   ansible.builtin.set_fact:
+#     dns_one_ok: "{{ dns_one.stdout_lines | select('search', 'OK') | list | length > 0 }}" 
+#     dns_two_ok: "{{ dns_two.stdout_lines | select('search', 'OK') | list | length > 0 }}"
+
+# - name: Lista de servidores que falharam na conexão com a porta 53
+#   ansible.builtin.fail:
+#     msg: "❌ Porta 53 não acessível. Favor solicitar regra de firewall."
+#   when: dns_one_ok == false or dns_two_ok == false
+
+# - name: Lista de servidores que comunicaram com a porta 53
+#   ansible.builtin.debug:
+#     msg: "✅ Porta 53 comunidando."
+#   when: dns_one_ok == true and dns_two_ok == true
+
+# - name: Validando os servidores que comunicaram com sucesso na porta 53
+#   ansible.builtin.set_fact:
+#     dns_one_falha: "{{ dns_one.stdout_lines | select('search', 'FALHA') | list | length > 0 }}"
+#     dns_two_falha: "{{ dns_two.stdout_lines | select('search', 'FALHA') | list | length > 0 }}"
+
+# - name: Lista de servidores que falharam na conexão com a porta 53
+#   ansible.builtin.debug:
+#     msg: "❌ Porta 53 não acessível. Favor solicitar regra de firewall."
+#   when: dns_one_falha or dns_two_falha
+
+# - name: Extraindo o conteúdo do novo resolv.conf
+#   ansible.builtin.raw: cat /etc/resolv.conf
+#   register: resolv_info
+
+# - name: Convertendo o conteúdo do resolv.conf para uma variável
+#   ansible.builtin.set_fact:
+#     filtered_lines: >-
+#       {{
+#         resolv_info.stdout_lines
+#         | select('search', '^(search|nameserver)')
+#         | list
+#       }}
+
+# - name: Exibindo o conteúdo do novo resolv.conf
+#   ansible.builtin.debug:
+#     msg: "{{ filtered_lines  }}"
+
+# - name: Executar nslookup claro.com.br para teste de PTR
+#   ansible.builtin.raw: nslookup claro.com.br
+#   register: nslookup_result
+#   failed_when: false
+
+# - name: Verificar se erro específico está presente
+#   ansible.builtin.set_fact:
+#     skip_resolv_update: true
+#   when: "'not available' in nslookup_result.stdout | lower"
+
+# - name: Debug - erro encontrado, não alterar resolv.conf
+#   ansible.builtin.debug:
+#     msg: "Erro de PTR detectado. Nenhuma alteração será feita no resolv.conf."
+#   when: skip_resolv_update | default(false)
+
+
+============================================================
+ARQUIVO: ./roles/inventory/tasks/main.yaml
+============================================================
+- name: Adiciona servidores do {{ datacenter }} ao grupo unix
+  ansible.builtin.add_host:
+    name: "{{ item | trim }}"
+    groups: unix
+  loop: "{{ servers.splitlines() | map('trim') | unique | list }}"
+  run_once: true
+
+# - name: Adiciona servidores do {{datacenter}} ao grupo unix
+#   ansible.builtin.add_host:
+#     name: "{{ item | trim }}"
+#     groups: unix
+#   loop: "{{ servers.splitlines() }}"
+#   run_once: true
+
+
+============================================================
+ARQUIVO: ./roles/resol/tasks/main.yaml
+============================================================
+- name: Extraindo o conteúdo do novo resolv.conf
+  ansible.builtin.raw: cat /etc/resolv.conf
+  register: resolv_info
+
+- name: Convertendo o conteúdo do resolv.conf para uma variável
+  set_fact:
+    filtered_lines: >-
+      {{
+        resolv_info.stdout_lines
+        | select('search', '^(search|nameserver) ')
+        | list
+      }}
+
+- name: Exibindo o conteúdo do novo resolv.conf
+  ansible.builtin.debug:
+    msg: "{{ filtered_lines  }}"
+
+
+============================================================
+ARQUIVO: ./roles/rhel_cpa/tasks/main.yaml
+============================================================
+- name: Extraindo o conteúdo do resolv.conf antes das alterações
+  ansible.builtin.raw: cat /etc/resolv.conf
+  register: resolv_info
+
+- name: Convertendo o conteúdo do resolv.conf para uma variável
+  set_fact:
+    filtered_lines: >-
+      {{
+        resolv_info.stdout_lines
+        | select('search', '^(search|nameserver) ')
+        | list
+      }}
+
+- name: Exibindo o conteúdo do resolv.conf antes das alterações
+  ansible.builtin.debug:
+    msg: "{{ filtered_lines  }}"
+
+- name: Testando conexão na porta 53 com o IP 10.54.44.12
+  ansible.builtin.raw: |
+    for ip in 10.54.44.12; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=$(echo quit | telnet $ip 53 2>/dev/null)
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=$(dig @$ip google.com +time=2 +tries=1)
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=$(nmap -p 53 -Pn --host-timeout 5s $ip)
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_one
+
+- name: Testando conexão na porta 53 com o IP 10.29.177.82
+  ansible.builtin.raw: |
+    for ip in 10.29.177.82; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=$(echo quit | telnet $ip 53 2>/dev/null)
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=$(dig @$ip google.com +time=2 +tries=1)
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=$(nmap -p 53 -Pn --host-timeout 5s $ip)
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_two
+
+- name: Validando os servidores que comunicaram com sucesso na porta 53
+  ansible.builtin.set_fact:
+    dns_one_sucesso: "{{ dns_one.stdout_lines | select('search', 'OK') | list | length > 0 }}"
+    dns_two_sucesso: "{{ dns_two.stdout_lines | select('search', 'OK') | list | length > 0 }}"
+
+- name: Fazendo alterações se houver comunicação na porta 53 com DNS
+  ansible.builtin.debug:
+    msg: "✅ Porta 53 acessível. Prosseguindo com a automação..."
+  when: dns_one_sucesso and dns_two_sucesso
+
+- name: Lista de servidores que falharam na conexão com a porta 53
+  ansible.builtin.debug:
+    msg: "❌ Porta 53 não acessível. Favor solicitar regra de firewall."
+  when: dns_one_sucesso == false or dns_two_sucesso == false
+
+#Configurando o resolv.conf
+- name: Verificando se o resolv.conf já foi alterado pelo Ansible
+  ansible.builtin.raw: grep -q 'ANSIBLE' /etc/resolv.conf
+  register: resolv_alterado
+  ignore_errors: true
+
+- name: Mostra resultado do grep (debug opcional)
+  ansible.builtin.debug:
+    msg: "Arquivo já foi alterado, não será mais modificado modificado."
+  when: resolv_alterado.rc == 0
+
+- name: Fazendo backup do resolv.conf (apenas servidores que passaram no teste) 
+  ansible.builtin.raw: |
+    if [ -f /etc/resolv.conf ]; then
+      cp -p /etc/resolv.conf /etc/resolv.conf.bkp-ansible
+    fi
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+# - name: Fazendo backup do resolv.conf (apenas servidores que passaram no teste) 
+#   ansible.builtin.raw: |
+#     if [ -f /etc/resolv.conf ]; then
+#       cp -p /etc/resolv.conf /etc/resolv.conf.bkp-$(date +%F-%H%M%S)
+#     fi
+#   when: dns_com_sucesso and resolv_alterado.rc != 0
+
+- name: 1-Extraindo os atributos do arquivo resolv.conf antes das alterações
+  ansible.builtin.raw: lsattr /etc/resolv.conf
+  register: atributos_antes
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 1-Exibindo os atributos do arquivo resolv.conf antes das alterações
+  ansible.builtin.debug:
+    msg: | 
+      "Atributos antes: {{ atributos_antes.stdout_lines | select('search', '/etc/resolv.conf') | list | first }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Removendo a imutabilidade do resolv.conf (caso esteja ativado)
+  ansible.builtin.raw: |
+    if command -v chattr >/dev/null 2>&1; then
+      chattr -i /etc/resolv.conf || true
+    fi
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 2-Extraindo os atributos do arquivo resolv.conf depois das alterações
+  ansible.builtin.raw: lsattr /etc/resolv.conf
+  register: atributos_depois
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 2-Exibindo os atributos do arquivo resolv.conf depois das alterações
+  ansible.builtin.debug:
+    msg: |
+       "Atributos depois: {{ atributos_depois.stdout_lines | select('search', '/etc/resolv.conf') | list | first }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Verificando se o arquivo resolv.conf é link simbólico
+  ansible.builtin.raw: |
+    if [ -L /etc/resolv.conf ]; then echo "LINK"; else echo "FILE"; fi
+  register: resolv_type
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Validando os servidores com links simbólicos
+  ansible.builtin.debug:
+    msg: "{{ resolv_type.stdout_lines | select('search', 'FILE') | list }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Removendo o link simbólico se necessário
+  ansible.builtin.raw: rm -f /etc/resolv.conf
+  when: >
+    (resolv_type.stdout_lines | default([]) | select('search', 'LINK') | list | length > 0)
+    and dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Alterando o /etc/resolv.conf
+  ansible.builtin.raw: |
+    sed -i '/^nameserver/d' /etc/resolv.conf
+    echo "# <!-- BEGIN ANSIBLE MANAGED BLOCK -->" >> /etc/resolv.conf
+    echo "nameserver 10.54.44.12" >> /etc/resolv.conf
+    echo "nameserver 10.29.177.82" >> /etc/resolv.conf
+    echo "# <!-- END ANSIBLE MANAGED BLOCK -->" >> /etc/resolv.conf
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+# - name: Alterando o /etc/resolv.conf
+#   ansible.builtin.raw: |
+#     cat > /etc/resolv.conf <<EOF
+#     # <!-- BEGIN ANSIBLE MANAGED BLOCK aap -->
+#     search claro.com.br corp.clarobr cpqcloud.corp.clarobr compute.cloud.corp.clarobr cloud.corp.clarobr nt.embratel.com.br embratel.com.br
+#     nameserver 10.54.44.12
+#     nameserver 10.29.177.82
+#     # <!-- END ANSIBLE MANAGED BLOCK aap -->
+#     EOF
+#   when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Tornando o resolv.conf imutável para evitar sobrescrita
+  ansible.builtin.raw: |
+    if command -v chattr >/dev/null 2>&1; then
+      chattr +i /etc/resolv.conf
+    fi
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 3-Extraindo os atributos do arquivo resolv.conf após todas as alterações 
+  ansible.builtin.raw: lsattr /etc/resolv.conf
+  register: atributos_final
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 3-Exibindo os atributos do arquivo resolv.conf após todas as alterações 
+  ansible.builtin.debug:
+    msg: |
+      "Atributos finais: {{ atributos_final.stdout_lines | select('search', '/etc/resolv.conf') | list | first }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Extraindo o conteúdo do resolv.conf depois das alterações
+  ansible.builtin.raw: cat /etc/resolv.conf
+  register: resolv_info
+  when: dns_one_sucesso and dns_two_sucesso
+
+- name: Convertendo o conteúdo do resolv.conf para uma variável
+  set_fact:
+    filtered_lines: >-
+      {{
+        resolv_info.stdout_lines
+        | select('search', '^(search|nameserver) ')
+        | list
+      }}
+  when: dns_one_sucesso and dns_two_sucesso
+
+- name: Exibindo o conteúdo do resolv.conf depois das alterações
+  ansible.builtin.debug:
+    msg: "{{ filtered_lines  }}"
+  when: dns_one_sucesso and dns_two_sucesso
+
+
+============================================================
+ARQUIVO: ./roles/rhel_lapa/tasks/main.yaml
+============================================================
+- name: Testando conexão na porta 53 com o IP 10.29.177.81
+  ansible.builtin.raw: |
+    for ip in 10.29.177.81; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=$(echo quit | telnet $ip 53 2>/dev/null)
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=$(dig @$ip google.com +time=2 +tries=1)
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=$(nmap -p 53 -Pn --host-timeout 5s $ip)
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_one
+
+- name: Testando conexão na porta 53 com o IP 10.53.22.102
+  ansible.builtin.raw: |
+    for ip in 10.53.22.102; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=$(echo quit | telnet $ip 53 2>/dev/null)
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=$(dig @$ip google.com +time=2 +tries=1)
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=$(nmap -p 53 -Pn --host-timeout 5s $ip)
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_two
+
+- name: Validando os servidores que comunicaram com sucesso na porta 53
+  ansible.builtin.set_fact:
+    dns_one_sucesso: "{{ dns_one.stdout_lines | select('search', 'OK') | list | length > 0 }}"
+    dns_two_sucesso: "{{ dns_two.stdout_lines | select('search', 'OK') | list | length > 0 }}"
+
+- name: Fazendo alterações se houver comunicação na porta 53 com DNS
+  ansible.builtin.debug:
+    msg: "✅ Porta 53 acessível. Prosseguindo com a automação..."
+  when: dns_one_sucesso and dns_two_sucesso
+
+- name: Lista de servidores que falharam na conexão com a porta 53
+  ansible.builtin.debug:
+    msg: "❌ Porta 53 não acessível. Favor solicitar regra de firewall."
+  when: not dns_one_sucesso and not dns_two_sucesso
+
+#Configurando o resolv.conf
+- name: Verificando se o resolv.conf já foi alterado pelo Ansible
+  ansible.builtin.raw: grep -q 'ANSIBLE' /etc/resolv.conf
+  register: resolv_alterado
+  ignore_errors: true
+  when: dns_one_sucesso and dns_two_sucesso
+
+- name: Mostra resultado do grep (debug opcional)
+  ansible.builtin.debug:
+    msg: "Arquivo já foi alterado, não será mais modificado modificado."
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Fazendo backup do resolv.conf (apenas servidores que passaram no teste) 
+  ansible.builtin.raw: |
+    if [ -f /etc/resolv.conf ]; then
+      cp -p /etc/resolv.conf /etc/resolv.conf.bkp-ansible
+    fi
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+# - name: Fazendo backup do resolv.conf (apenas servidores que passaram no teste) 
+#   ansible.builtin.raw: |
+#     if [ -f /etc/resolv.conf ]; then
+#       cp -p /etc/resolv.conf /etc/resolv.conf.bkp-$(date +%F-%H%M%S)
+#     fi
+#   when: dns_com_sucesso and resolv_alterado.rc != 0
+
+- name: 1-Extraindo os atributos do arquivo resolv.conf antes das alterações
+  ansible.builtin.raw: lsattr /etc/resolv.conf
+  register: atributos_antes
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 1-Exibindo os atributos do arquivo resolv.conf antes das alterações
+  ansible.builtin.debug:
+    msg: | 
+      "Atributos antes: {{ atributos_antes.stdout_lines | select('search', '/etc/resolv.conf') | list | first }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Removendo a imutabilidade do resolv.conf (caso esteja ativado)
+  ansible.builtin.raw: |
+    if command -v chattr >/dev/null 2>&1; then
+      chattr -i /etc/resolv.conf || true
+    fi
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 2-Extraindo os atributos do arquivo resolv.conf depois das alterações
+  ansible.builtin.raw: lsattr /etc/resolv.conf
+  register: atributos_depois
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 2-Exibindo os atributos do arquivo resolv.conf depois das alterações
+  ansible.builtin.debug:
+    msg: |
+       "Atributos depois: {{ atributos_depois.stdout_lines | select('search', '/etc/resolv.conf') | list | first }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Verificando se o arquivo resolv.conf é link simbólico
+  ansible.builtin.raw: |
+    if [ -L /etc/resolv.conf ]; then echo "LINK"; else echo "FILE"; fi
+  register: resolv_type
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Validando os servidores com links simbólicos
+  ansible.builtin.debug:
+    msg: "{{ resolv_type.stdout_lines | select('search', 'FILE') | list }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Removendo o link simbólico se necessário
+  ansible.builtin.raw: rm -f /etc/resolv.conf
+  when: >
+    (resolv_type.stdout_lines | default([]) | select('search', 'LINK') | list | length > 0)
+    and dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+# - name: Alterando o /etc/resolv.conf
+#   ansible.builtin.raw: |
+#     cat > /etc/resolv.conf <<EOF
+#     # <!-- BEGIN ANSIBLE MANAGED BLOCK aap -->
+#     search dcing.corp claro.com.br corp.clarobr cpqcloud.corp.clarobr compute.cloud.corp.clarobr cloud.corp.clarobr
+#     nameserver 10.29.177.81
+#     nameserver 10.53.22.102
+#     # <!-- END ANSIBLE MANAGED BLOCK aap -->
+#     EOF
+#   when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Alterando o /etc/resolv.conf
+  ansible.builtin.raw: |
+    sed -i '/^nameserver/d' /etc/resolv.conf
+    echo "# <!-- BEGIN ANSIBLE MANAGED BLOCK -->" >> /etc/resolv.conf
+    echo "nameserver 10.29.177.81" >> /etc/resolv.conf
+    echo "nameserver 10.53.22.102" >> /etc/resolv.conf
+    echo "# <!-- END ANSIBLE MANAGED BLOCK -->" >> /etc/resolv.conf
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+
+- name: Tornando o resolv.conf imutável para evitar sobrescrita
+  ansible.builtin.raw: |
+    if command -v chattr >/dev/null 2>&1; then
+      chattr +i /etc/resolv.conf
+    fi
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 3-Extraindo os atributos do arquivo resolv.conf após todas as alterações 
+  ansible.builtin.raw: lsattr /etc/resolv.conf
+  register: atributos_final
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 3-Exibindo os atributos do arquivo resolv.conf após todas as alterações 
+  ansible.builtin.debug:
+    msg: |
+      "Atributos finais: {{ atributos_final.stdout_lines | select('search', '/etc/resolv.conf') | list | first }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Extraindo o conteúdo do novo resolv.conf
+  ansible.builtin.raw: cat /etc/resolv.conf
+  register: resolv_info
+  when: dns_one_sucesso and dns_two_sucesso
+
+- name: Convertendo o conteúdo do resolv.conf para uma variável
+  set_fact:
+    filtered_lines: >-
+      {{
+        resolv_info.stdout_lines
+        | select('search', '^(search|nameserver) ')
+        | list
+      }}
+  when: dns_one_sucesso and dns_two_sucesso
+
+- name: Exibindo o conteúdo do novo resolv.conf
+  ansible.builtin.debug:
+    msg: "{{ filtered_lines  }}"
+  when: dns_one_sucesso and dns_two_sucesso
+
+
+============================================================
+ARQUIVO: ./roles/rhel_mck/tasks/main.yaml
+============================================================
+- name: Testando conexão na porta 53 com o IP 10.54.44.13
+  ansible.builtin.raw: |
+    for ip in 10.54.44.13; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=$(echo quit | telnet $ip 53 2>/dev/null)
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=$(dig @$ip google.com +time=2 +tries=1)
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=$(nmap -p 53 -Pn --host-timeout 5s $ip)
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_one
+
+- name: Testando conexão na porta 53 com o IP 10.53.22.101
+  ansible.builtin.raw: |
+    for ip in 10.53.22.101; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=$(echo quit | telnet $ip 53 2>/dev/null)
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=$(dig @$ip google.com +time=2 +tries=1)
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=$(nmap -p 53 -Pn --host-timeout 5s $ip)
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_two
+
+- name: Validando os servidores que comunicaram com sucesso na porta 53
+  ansible.builtin.set_fact:
+    dns_one_sucesso: "{{ dns_one.stdout_lines | select('search', 'OK') | list | length > 0 }}"
+    dns_two_sucesso: "{{ dns_two.stdout_lines | select('search', 'OK') | list | length > 0 }}"
+
+- name: Fazendo alterações se houver comunicação na porta 53 com DNS
+  ansible.builtin.debug:
+    msg: "✅ Porta 53 acessível. Prosseguindo com a automação..."
+  when: dns_one_sucesso and dns_two_sucesso
+
+- name: Lista de servidores que falharam na conexão com a porta 53
+  ansible.builtin.debug:
+    msg: "❌ Porta 53 não acessível. Favor solicitar regra de firewall."
+  when: dns_one_sucesso == false or dns_two_sucesso == false
+
+#Configurando o resolv.conf
+- name: Verificando se o resolv.conf já foi alterado pelo Ansible
+  ansible.builtin.raw: grep -q 'ANSIBLE' /etc/resolv.conf
+  register: resolv_alterado
+  ignore_errors: true
+
+- name: Mostra resultado do grep (debug opcional)
+  ansible.builtin.debug:
+    msg: "Arquivo já foi alterado, não será mais modificado modificado."
+  when: resolv_alterado.rc == 0
+
+- name: Fazendo backup do resolv.conf (apenas servidores que passaram no teste)
+  ansible.builtin.raw: |
+    if [ -f /etc/resolv.conf ]; then
+      cp -p /etc/resolv.conf /etc/resolv.conf.bkp-ansible
+    fi
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+# - name: Fazendo backup do resolv.conf (apenas servidores que passaram no teste)
+#   ansible.builtin.raw: |
+#     if [ -f /etc/resolv.conf ]; then
+#       cp -p /etc/resolv.conf /etc/resolv.conf.bkp-$(date +%F-%H%M%S)
+#     fi
+#   when: dns_com_sucesso and resolv_alterado.rc != 0
+
+- name: 1-Extraindo os atributos do arquivo resolv.conf antes das alterações
+  ansible.builtin.raw: lsattr /etc/resolv.conf
+  register: atributos_antes
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 1-Exibindo os atributos do arquivo resolv.conf antes das alterações
+  ansible.builtin.debug:
+    msg: |
+      "Atributos antes: {{ atributos_antes.stdout_lines | select('search', '/etc/resolv.conf') | list | first }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Removendo a imutabilidade do resolv.conf (caso esteja ativado)
+  ansible.builtin.raw: |
+    if command -v chattr >/dev/null 2>&1; then
+      chattr -i /etc/resolv.conf || true
+    fi
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 2-Extraindo os atributos do arquivo resolv.conf depois das alterações
+  ansible.builtin.raw: lsattr /etc/resolv.conf
+  register: atributos_depois
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 2-Exibindo os atributos do arquivo resolv.conf depois das alterações
+  ansible.builtin.debug:
+    msg: |
+       "Atributos depois: {{ atributos_depois.stdout_lines | select('search', '/etc/resolv.conf') | list | first }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Verificando se o arquivo resolv.conf é link simbólico
+  ansible.builtin.raw: |
+    if [ -L /etc/resolv.conf ]; then echo "LINK"; else echo "FILE"; fi
+  register: resolv_type
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Validando os servidores com links simbólicos
+  ansible.builtin.debug:
+    msg: "{{ resolv_type.stdout_lines | select('search', 'FILE') | list }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Removendo o link simbólico se necessário
+  ansible.builtin.raw: rm -f /etc/resolv.conf
+  when: >
+    (resolv_type.stdout_lines | default([]) | select('search', 'LINK') | list | length > 0)
+    and dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+# - name: Alterando o /etc/resolv.conf
+#   ansible.builtin.raw: |
+#     cat > /etc/resolv.conf <<EOF
+#     # <!-- BEGIN ANSIBLE MANAGED BLOCK aap -->
+#     search claro.com.br corp.clarobr cpqcloud.corp.clarobr compute.cloud.corp.clarobr cloud.corp.clarobr nt.embratel.com.br embratel.com.br
+#     nameserver 10.53.22.101
+#     nameserver 10.54.44.13
+#     # <!-- END ANSIBLE MANAGED BLOCK aap -->
+#     EOF
+#   when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Alterando o /etc/resolv.conf
+  ansible.builtin.raw: |
+    cat > /etc/resolv.conf <<EOF
+    # <!-- BEGIN ANSIBLE MANAGED BLOCK aap -->
+    nameserver 10.53.22.101
+    nameserver 10.54.44.13
+    # <!-- END ANSIBLE MANAGED BLOCK aap -->
+    EOF
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Tornando o resolv.conf imutável para evitar sobrescrita
+  ansible.builtin.raw: |
+    if command -v chattr >/dev/null 2>&1; then
+      chattr +i /etc/resolv.conf
+    fi
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 3-Extraindo os atributos do arquivo resolv.conf após todas as alterações
+  ansible.builtin.raw: lsattr /etc/resolv.conf
+  register: atributos_final
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 3-Exibindo os atributos do arquivo resolv.conf após todas as alterações
+  ansible.builtin.debug:
+    msg: |
+      "Atributos finais: {{ atributos_final.stdout_lines | select('search', '/etc/resolv.conf') | list | first }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Extraindo o conteúdo do novo resolv.conf
+  ansible.builtin.raw: cat /etc/resolv.conf
+  register: resolv_info
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Convertendo o conteúdo do resolv.conf para uma variável
+  set_fact:
+    filtered_lines: >-
+      {{
+        resolv_info.stdout_lines
+        | select('search', '^(search|nameserver)')
+        | list
+      }}
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Exibindo o conteúdo do novo resolv.conf
+  ansible.builtin.debug:
+    msg: "{{ filtered_lines  }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+
+============================================================
+ARQUIVO: ./roles/rhel_rollback/tasks/main.yaml
+============================================================
+- name: Removendo a imutabilidade do resolv.conf (caso esteja ativado)
+  ansible.builtin.raw: |
+    if command -v chattr >/dev/null 2>&1; then
+      chattr -i /etc/resolv.conf || true
+    fi
+
+- name: Rollback do resolv.conf (restaura a partir do backup)
+  ansible.builtin.raw: |
+    if [ -f /etc/resolv.conf.bkp-ansible ]; then
+      cp -p /etc/resolv.conf.bkp-ansible /etc/resolv.conf
+    fi
+
+- name: Tornando o resolv.conf imutável para evitar sobrescrita
+  ansible.builtin.raw: |
+    if command -v chattr >/dev/null 2>&1; then
+      chattr +i /etc/resolv.conf
+    fi
+
+- name: Extraindo o conteúdo do novo resolv.conf
+  ansible.builtin.raw: cat /etc/resolv.conf
+  register: resolv_info
+
+- name: Exibindo o conteúdo do novo resolv.conf
+  ansible.builtin.debug:
+    var: resolv_info.stdout_lines
+
+
+============================================================
+ARQUIVO: ./roles/sunos_cpa/tasks/main.yaml
+============================================================
+- name: Testando conexão na porta 53 com o IP 10.54.44.12
+  ansible.builtin.raw: |
+    for ip in 10.54.44.12; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=`echo quit | telnet $ip 53 2>/dev/null`
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=`dig @$ip google.com +time=2 +tries=1`
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=`nmap -p 53 -Pn --host-timeout 5s $ip`
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_one
+
+- name: Testando conexão na porta 53 com o IP 10.29.177.82
+  ansible.builtin.raw: |
+    for ip in 10.29.177.82; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=`echo quit | telnet $ip 53 2>/dev/null`
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=`dig @$ip google.com +time=2 +tries=1`
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=`nmap -p 53 -Pn --host-timeout 5s $ip`
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_two
+
+- name: Validando os servidores que comunicaram com sucesso na porta 53
+  ansible.builtin.set_fact:
+    dns_one_sucesso: "{{ dns_one.stdout_lines | select('search', 'OK') | list | length > 0 }}"
+    dns_two_sucesso: "{{ dns_two.stdout_lines | select('search', 'OK') | list | length > 0 }}"
+
+- name: Fazendo alterações se houver comunicação na porta 53 com DNS
+  ansible.builtin.debug:
+    msg: "✅ Porta 53 acessível. Prosseguindo com a automação..."
+  when: dns_one_sucesso and dns_two_sucesso
+
+- name: Lista de servidores que falharam na conexão com a porta 53
+  ansible.builtin.debug:
+    msg: "❌ Porta 53 não acessível. Favor solicitar regra de firewall."
+  when: dns_one_sucesso == false or dns_two_sucesso == false
+
+#Configurando o resolv.conf
+- name: Verificando se o resolv.conf já foi alterado pelo Ansible
+  ansible.builtin.raw: grep 'ANSIBLE' /etc/resolv.conf >/dev/null 2>&1
+  register: resolv_alterado
+  ignore_errors: true
+
+- name: Validando se o resolv.conf já foi alterado
+  ansible.builtin.debug:
+    msg: "Arquivo já foi alterado, não será mais modificado modificado."
+  when: resolv_alterado.rc == 0
+
+- name: Fazendo backup do resolv.conf (apenas servidores que passaram no teste)
+  ansible.builtin.raw: |
+    if [ -f /etc/resolv.conf ]; then
+      cp -p /etc/resolv.conf /etc/resolv.conf.bkp-ansible
+    fi
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+# - name: Fazendo backup do resolv.conf (apenas servidores que passaram no teste)
+#   ansible.builtin.raw: |
+#     if [ -f /etc/resolv.conf ]; then
+#       cp -p /etc/resolv.conf /etc/resolv.conf.bkp-$(date +%Y-%m-%d-%H%M%S)
+#     fi
+#   when: dns_com_sucesso and resolv_alterado.rc != 0
+
+- name: Alterando o /etc/resolv.conf
+  ansible.builtin.raw: |
+    cat > /etc/resolv.conf <<EOF
+    # <!-- BEGIN ANSIBLE MANAGED BLOCK aap -->
+    search claro.com.br corp.clarobr cpqcloud.corp.clarobr compute.cloud.corp.clarobr cloud.corp.clarobr nt.embratel.com.br embratel.com.br
+    nameserver 10.54.44.12
+    nameserver 10.29.177.82
+    # <!-- END ANSIBLE MANAGED BLOCK aap -->
+    EOF
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Ajustando o arquivo /etc/nsswitch.conf
+  ansible.builtin.raw: |
+    if grep -q '^hosts:' /etc/nsswitch.conf; then
+      sed 's/^hosts:.*/hosts: files dns/' /etc/nsswitch.conf > /tmp/nsswitch.conf && mv /tmp/nsswitch.conf /etc/nsswitch.conf
+    else
+      echo 'hosts: files dns' >> /etc/nsswitch.conf
+    fi
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Extraindo o conteúdo do novo resolv.conf
+  ansible.builtin.raw: cat /etc/resolv.conf
+  register: resolv_info
+  when: dns_one_sucesso and dns_two_sucesso
+
+- name: Convertendo o conteúdo do resolv.conf para uma variável
+  ansible.builtin.set_fact:
+    filtered_lines: >-
+      {{
+        resolv_info.stdout_lines
+        | select('search', '^(search|nameserver) ')
+        | list
+      }}
+  when: dns_one_sucesso and dns_two_sucesso 
+
+- name: Exibindo o conteúdo do novo resolv.conf
+  ansible.builtin.debug:
+    msg: "{{ filtered_lines  }}"
+  when: dns_one_sucesso and dns_two_sucesso 
+
+
+============================================================
+ARQUIVO: ./roles/sunos_lapa/tasks/main.yaml
+============================================================
+#Validando comunicação com os servidores DNS
+- name: Testando conexão na porta 53 com o IP 10.29.177.81
+  ansible.builtin.raw: |
+    for ip in 10.29.177.81; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=`echo quit | telnet $ip 53 2>/dev/null`
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=`dig @$ip google.com +time=2 +tries=1`
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=`nmap -p 53 -Pn --host-timeout 5s $ip`
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_one
+
+- name: Testando conexão na porta 53 com o IP 10.53.22.102
+  ansible.builtin.raw: |
+    for ip in 10.53.22.102; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=`echo quit | telnet $ip 53 2>/dev/null`
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=`dig @$ip google.com +time=2 +tries=1`
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=`nmap -p 53 -Pn --host-timeout 5s $ip`
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_two
+
+- name: Validando os servidores que comunicaram com sucesso na porta 53
+  ansible.builtin.set_fact:
+    dns_one_sucesso: "{{ dns_one.stdout_lines | select('search', 'OK') | list | length > 0 }}"
+    dns_two_sucesso: "{{ dns_two.stdout_lines | select('search', 'OK') | list | length > 0 }}"
+
+- name: Fazendo alterações se houver comunicação na porta 53 com DNS
+  ansible.builtin.debug:
+    msg: "✅ Porta 53 acessível. Prosseguindo com a automação..."
+  when: dns_one_sucesso and dns_two_sucesso
+
+- name: Lista de servidores que falharam na conexão com a porta 53
+  ansible.builtin.debug:
+    msg: "❌ Porta 53 não acessível. Favor solicitar regra de firewall."
+  when: dns_one_sucesso == false or dns_two_sucesso == false
+
+#Fazendo o backup do resolv.conf
+- name: Verificando se o resolv.conf já foi alterado pelo Ansible
+  ansible.builtin.raw: grep 'ANSIBLE' /etc/resolv.conf >/dev/null 2>&1
+  register: resolv_alterado
+  ignore_errors: true
+
+- name: Validando se o resolv.conf já foi alterado
+  ansible.builtin.debug:
+    msg: "Arquivo já foi alterado, não será mais modificado modificado."
+  when: resolv_alterado.rc == 0
+
+- name: Fazendo backup do resolv.conf (apenas servidores que passaram no teste)
+  ansible.builtin.raw: |
+    if [ -f /etc/resolv.conf ]; then
+      cp -p /etc/resolv.conf /etc/resolv.conf.bkp-ansible
+    fi
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+# - name: Fazendo backup do resolv.conf (apenas servidores que passaram no teste)
+#   ansible.builtin.raw: |
+#     if [ -f /etc/resolv.conf ]; then
+#       cp -p /etc/resolv.conf /etc/resolv.conf.bkp-$(date +%Y-%m-%d-%H%M%S)
+#     fi
+#   when: dns_com_sucesso and resolv_alterado.rc != 0
+
+#Configurando o resolv.conf
+# - name: Alterando o /etc/resolv.conf
+#   ansible.builtin.raw: |
+#     cat > /etc/resolv.conf <<EOF
+#     # <!-- BEGIN ANSIBLE MANAGED BLOCK aap -->
+#     search dcing.corp claro.com.br corp.clarobr cpqcloud.corp.clarobr compute.cloud.corp.clarobr cloud.corp.clarobr
+#     nameserver 10.29.177.81
+#     nameserver 10.53.22.102
+#     # <!-- END ANSIBLE MANAGED BLOCK aap -->
+#     EOF
+#   when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Alterando o /etc/resolv.conf
+  ansible.builtin.raw: |
+    sed -i '/^nameserver/d' /etc/resolv.conf
+    echo "# <!-- BEGIN ANSIBLE MANAGED BLOCK -->" >> /etc/resolv.conf
+    echo "nameserver 10.29.177.81" >> /etc/resolv.conf
+    echo "nameserver 10.53.22.102" >> /etc/resolv.conf
+    echo "# <!-- END ANSIBLE MANAGED BLOCK -->" >> /etc/resolv.conf
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+#Ajustando o nsswitch.conf
+- name: Capturar o conteúdo do arquivo nsswitch.conf
+  ansible.builtin.raw: grep '^hosts:' /etc/nsswitch.conf || true
+  register: conteudo_nsswitch
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Exibir o conteúdo do arquivo nsswitch.conf
+  ansible.builtin.debug:
+    msg: "{{ conteudo_nsswitch.stdout }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Ajustando o arquivo /etc/nsswitch.conf que não contém a consulta cluster
+  ansible.builtin.raw: |
+    grep -v '^hosts:' /etc/nsswitch.conf > /tmp/nsswitch.conf && mv /tmp/nsswitch.conf /etc/nsswitch.conf
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0 and ("cluster" not in conteudo_nsswitch.stdout)
+
+- name: Ajustando o arquivo /etc/nsswitch.conf para consultar o dns infoblox
+  ansible.builtin.raw: |
+    echo hosts: files dns >> /etc/nsswitch.conf
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0 and ("cluster" not in conteudo_nsswitch.stdout)
+
+# - name: Ajustando o arquivo /etc/nsswitch.conf
+#   ansible.builtin.raw: |
+#     if grep -q '^hosts:' /etc/nsswitch.conf; then
+#       sed 's/^hosts:.*/hosts: files dns/' /etc/nsswitch.conf > /tmp/nsswitch.conf && mv /tmp/nsswitch.conf /etc/nsswitch.conf
+#     else
+#       echo 'hosts: files dns' >> /etc/nsswitch.conf
+#     fi
+#   when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+#Exibindo o resolv.conf atualizado
+- name: Extraindo o conteúdo do novo resolv.conf
+  ansible.builtin.raw: cat /etc/resolv.conf
+  register: resolv_info
+  when: dns_one_sucesso and dns_two_sucesso
+
+- name: Convertendo o conteúdo do resolv.conf para uma variável
+  ansible.builtin.set_fact:
+    filtered_lines: >-
+      {{
+        resolv_info.stdout_lines
+        | select('search', '^(search|nameserver) ')
+        | list
+      }}
+  when: dns_one_sucesso and dns_two_sucesso 
+
+- name: Exibindo o conteúdo do novo resolv.conf
+  ansible.builtin.debug:
+    msg: "{{ filtered_lines  }}"
+  when: dns_one_sucesso and dns_two_sucesso 
+
+
+============================================================
+ARQUIVO: ./roles/sunos_mck/tasks/main.yaml
+============================================================
+#Validando comunicação com os servidores DNS
+- name: Testando conexão na porta 53 com o IP 10.54.44.13
+  ansible.builtin.raw: |
+    for ip in 10.54.44.13; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=`echo quit | telnet $ip 53 2>/dev/null`
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=`dig @$ip google.com +time=2 +tries=1`
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=`nmap -p 53 -Pn --host-timeout 5s $ip`
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_one
+
+- name: Testando conexão na porta 53 com o IP 10.53.22.101
+  ansible.builtin.raw: |
+    for ip in 10.53.22.101; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=`echo quit | telnet $ip 53 2>/dev/null`
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=`dig @$ip google.com +time=2 +tries=1`
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=`nmap -p 53 -Pn --host-timeout 5s $ip`
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_two
+
+- name: Validando os servidores que comunicaram com sucesso na porta 53
+  ansible.builtin.set_fact:
+    dns_one_sucesso: "{{ dns_one.stdout_lines | select('search', 'OK') | list | length > 0 }}"
+    dns_two_sucesso: "{{ dns_two.stdout_lines | select('search', 'OK') | list | length > 0 }}"
+
+- name: Fazendo alterações se houver comunicação na porta 53 com DNS
+  ansible.builtin.debug:
+    msg: "✅ Porta 53 acessível. Prosseguindo com a automação..."
+  when: dns_one_sucesso and dns_two_sucesso
+
+- name: Lista de servidores que falharam na conexão com a porta 53
+  ansible.builtin.debug:
+    msg: "❌ Porta 53 não acessível. Favor solicitar regra de firewall."
+  when: dns_one_sucesso == false or dns_two_sucesso == false
+
+#Fazendo o backup do resolv.conf
+- name: Verificando se o resolv.conf já foi alterado pelo Ansible
+  ansible.builtin.raw: grep 'ANSIBLE' /etc/resolv.conf >/dev/null 2>&1
+  register: resolv_alterado
+  ignore_errors: true
+
+- name: Validando se o resolv.conf já foi alterado
+  ansible.builtin.debug:
+    msg: "Arquivo já foi alterado, não será mais modificado modificado."
+  when: resolv_alterado.rc == 0
+
+- name: Fazendo backup do resolv.conf (apenas servidores que passaram no teste)
+  ansible.builtin.raw: |
+    if [ -f /etc/resolv.conf ]; then
+      cp -p /etc/resolv.conf /etc/resolv.conf.bkp-ansible
+    fi
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+# - name: Fazendo backup do resolv.conf (apenas servidores que passaram no teste)
+#   ansible.builtin.raw: |
+#     if [ -f /etc/resolv.conf ]; then
+#       cp -p /etc/resolv.conf /etc/resolv.conf.bkp-$(date +%Y-%m-%d-%H%M%S)
+#     fi
+#   when: dns_com_sucesso and resolv_alterado.rc != 0
+
+#Configurando o resolv.conf
+- name: Alterando o /etc/resolv.conf
+  ansible.builtin.raw: |
+    cat > /etc/resolv.conf <<EOF
+    # <!-- BEGIN ANSIBLE MANAGED BLOCK aap -->
+    search claro.com.br corp.clarobr cpqcloud.corp.clarobr compute.cloud.corp.clarobr cloud.corp.clarobr nt.embratel.com.br embratel.com.br
+    nameserver 10.53.22.101
+    nameserver 10.54.44.13
+    # <!-- END ANSIBLE MANAGED BLOCK aap -->
+    EOF
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+#Ajustando o nsswitch.conf
+- name: Capturar o conteúdo do arquivo nsswitch.conf
+  ansible.builtin.raw: grep '^hosts:' /etc/nsswitch.conf || true
+  register: conteudo_nsswitch
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Exibir o conteúdo do arquivo nsswitch.conf
+  ansible.builtin.debug:
+    msg: "{{ conteudo_nsswitch.stdout }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Ajustando o arquivo /etc/nsswitch.conf que não contém a consulta cluster
+  ansible.builtin.raw: |
+    grep -v '^hosts:' /etc/nsswitch.conf > /tmp/nsswitch.conf && mv /tmp/nsswitch.conf /etc/nsswitch.conf
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0 and ("cluster" not in conteudo_nsswitch.stdout)
+
+- name: Ajustando o arquivo /etc/nsswitch.conf para consultar o dns infoblox
+  ansible.builtin.raw: |
+    echo hosts: files dns >> /etc/nsswitch.conf
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0 and ("cluster" not in conteudo_nsswitch.stdout)
+
+# - name: Ajustando o arquivo /etc/nsswitch.conf
+#   ansible.builtin.raw: |
+#     if grep -q '^hosts:' /etc/nsswitch.conf; then
+#       sed 's/^hosts:.*/hosts: files dns/' /etc/nsswitch.conf > /tmp/nsswitch.conf && mv /tmp/nsswitch.conf /etc/nsswitch.conf
+#     else
+#       echo 'hosts: files dns' >> /etc/nsswitch.conf
+#     fi
+#   when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Extraindo o conteúdo do novo resolv.conf
+  ansible.builtin.raw: cat /etc/resolv.conf
+  register: resolv_info
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Convertendo o conteúdo do resolv.conf para uma variável
+  ansible.builtin.set_fact:
+    filtered_lines: >-
+      {{
+        resolv_info.stdout_lines
+        | select('search', '^(search|nameserver)')
+        | list
+      }}
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0  
+
+- name: Exibindo o conteúdo do novo resolv.conf
+  ansible.builtin.debug:
+    msg: "{{ filtered_lines  }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0 
+
+- name: Capturando o conteúdo do arquivo nsswitch.conf após a modificação
+  ansible.builtin.raw: grep '^hosts:' /etc/nsswitch.conf || true
+  register: conteudo_nsswitch
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Exibindo o conteúdo do arquivo nsswitch.conf após a modificação
+  ansible.builtin.debug:
+    msg: "{{ conteudo_nsswitch.stdout }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+
+============================================================
+ARQUIVO: ./roles/sunos_rollback/tasks/main.yaml
+============================================================
+- name: Rollback do resolv.conf (restaura a partir do backup)
+  ansible.builtin.raw: |
+    if [ -f /etc/resolv.conf.bkp-ansible ]; then
+      cp -p /etc/resolv.conf.bkp-ansible /etc/resolv.conf
+    fi
+
+- name: Extraindo o conteúdo do novo resolv.conf
+  ansible.builtin.raw: cat /etc/resolv.conf
+  register: resolv_info
+
+- name: Exibindo o conteúdo do novo resolv.conf
+  ansible.builtin.debug:
+    var: resolv_info.stdout_lines
+
+
+============================================================
+ARQUIVO: ./validation.yml
+============================================================
+---
+# =============================================================================
+# PLAYBOOK ÚNICO - VALIDAÇÃO INFOBLOX DNS LINUX
+# =============================================================================
+# Variáveis do Survey:
+#   - servers: Lista de IPs (um por linha)
+#   - datacenter: Mackenzie | Lapa | Campinas
+#   - email_destino: Email para enviar relatório
+#   - rdm: Número da RDM (opcional)
+# =============================================================================
+
+- name: Adicionar servidores ao inventory
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Adicionar servidores ao grupo unix
+      ansible.builtin.add_host:
+        name: "{{ item | trim }}"
+        groups: unix
+      loop: "{{ servers.splitlines() | map('trim') | select() | unique | list }}"
+      run_once: true
+
+# =============================================================================
+# PLAY 2: VALIDAR CONEXÃO SSH E PORTA 53
+# =============================================================================
+- name: Validar conectividade SSH e DNS
+  hosts: unix
+  gather_facts: false
+  ignore_unreachable: true
+  ignore_errors: true
+  
+  vars:
+    # IPs DNS por datacenter
+    dns_ips:
+      Mackenzie:
+        - "10.54.44.13"
+        - "10.53.22.101"
+      Lapa:
+        - "10.29.177.81"
+        - "10.53.22.102"
+      Campinas:
+        - "10.54.44.12"
+        - "10.29.177.82"
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # ETAPA 1: TESTAR CONEXÃO SSH
+    # -------------------------------------------------------------------------
+    - name: SSH | Testar conexão SSH
+      ansible.builtin.raw: echo "SSH_OK"
+      register: ssh_test
+      changed_when: false
+
+    - name: SSH | Registrar status da conexão
+      ansible.builtin.set_fact:
+        ssh_ok: "{{ ssh_test.stdout is defined and 'SSH_OK' in ssh_test.stdout }}"
+        ssh_erro_msg: "{{ ssh_test.msg | default('') }}"
+
+    # -------------------------------------------------------------------------
+    # ETAPA 2: DETECTAR SO (apenas se SSH OK)
+    # -------------------------------------------------------------------------
+    - name: SO | Detectar sistema operacional
+      ansible.builtin.raw: cat /etc/redhat-release 2>/dev/null || cat /etc/system-release 2>/dev/null || uname -s 2>/dev/null
+      register: so_detect
+      when: ssh_ok | default(false)
+      changed_when: false
+
+    # - name: SO | Registrar SO detectado
+    #   ansible.builtin.set_fact:
+    #     so_detectado: >-
+    #       {{ (so_detect.stdout_lines | default([]) | select('search', '.*(Red Hat|Oracle|SunOS|SUSE|HP-UX|Ubuntu|AIX|CentOS|Debian).*') | list | first) | default('Desconhecido') }}
+    #   when: ssh_ok | default(false)
+
+  
+    - name: SO | Registrar SO detectado (simplificado)
+      ansible.builtin.set_fact:
+        so_detectado: >-
+          {%- if 'Red Hat' in so_detect.stdout -%}
+            RHEL
+          {%- elif 'Oracle' in so_detect.stdout -%}
+            Oracle Linux
+          {%- elif 'Ubuntu' in so_detect.stdout -%}
+            Ubuntu
+          {%- else -%}
+            Linux
+          {%- endif -%}
+      when: ssh_ok | default(false)
+
+
+    # -------------------------------------------------------------------------
+    # ETAPA 3: TESTAR PORTA 53 (apenas se SSH OK)
+    # -------------------------------------------------------------------------
+    - name: DNS | Testar conectividade DNS - IP 1
+      ansible.builtin.raw: |
+        IP="{{ dns_ips[datacenter][0] }}"
+
+        NC_OK=0
+        TELNET_OK=0
+        DIG_OK=0
+        NMAP_OK=0
+
+        # Teste com nc
+        if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+          nc -z -w2 $IP 53 >/dev/null 2>&1 && NC_OK=1
+        fi
+
+        # Fallback com telnet
+        if command -v telnet >/dev/null 2>&1; then
+          telnet_output=$(echo quit | telnet $IP 53 2>/dev/null)
+          echo "$telnet_output" | grep -q "Escape character" && TELNET_OK=1
+        fi
+
+        # Teste com dig
+        if command -v dig >/dev/null 2>&1; then
+          dig @$IP google.com +time=2 +tries=1 2>/dev/null | grep -q "^;; SERVER:" && DIG_OK=1
+        fi
+
+        # Teste com nmap
+        if command -v nmap >/dev/null 2>&1; then
+          nmap -p 53 -Pn --host-timeout 5s $IP 2>/dev/null | grep "53/tcp" | grep -q "open" && NMAP_OK=1
+        fi
+
+        if [ "$NC_OK" -eq 1 ] || \
+           [ "$TELNET_OK" -eq 1 ] || \
+           [ "$DIG_OK" -eq 1 ] || \
+           [ "$NMAP_OK" -eq 1 ]; then
+          echo "DNS1_OK"
+        else
+          echo "DNS1_FALHA"
+        fi
+      register: dns1_test
+      when: ssh_ok | default(false)
+      changed_when: false
+
+    - name: DNS | Testar conectividade DNS - IP 2
+      ansible.builtin.raw: |
+        IP="{{ dns_ips[datacenter][1] }}"
+
+        NC_OK=0
+        TELNET_OK=0
+        DIG_OK=0
+        NMAP_OK=0
+
+        # Teste com nc
+        if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+          nc -z -w2 $IP 53 >/dev/null 2>&1 && NC_OK=1
+        fi
+
+        # Fallback com telnet
+        if command -v telnet >/dev/null 2>&1; then
+          telnet_output=$(echo quit | telnet $IP 53 2>/dev/null)
+          echo "$telnet_output" | grep -q "Escape character" && TELNET_OK=1
+        fi
+
+        # Teste com dig
+        if command -v dig >/dev/null 2>&1; then
+          dig @$IP google.com +time=2 +tries=1 2>/dev/null | grep -q "^;; SERVER:" && DIG_OK=1
+        fi
+
+        # Teste com nmap
+        if command -v nmap >/dev/null 2>&1; then
+          nmap -p 53 -Pn --host-timeout 5s $IP 2>/dev/null | grep "53/tcp" | grep -q "open" && NMAP_OK=1
+        fi
+
+        if [ "$NC_OK" -eq 1 ] || \
+           [ "$TELNET_OK" -eq 1 ] || \
+           [ "$DIG_OK" -eq 1 ] || \
+           [ "$NMAP_OK" -eq 1 ]; then
+          echo "DNS2_OK"
+        else
+          echo "DNS2_FALHA"
+        fi
+      register: dns2_test
+      when: ssh_ok | default(false)
+      changed_when: false
+
+    - name: DNS | Registrar status porta 53
+      ansible.builtin.set_fact:
+        dns1_ok: "{{ dns1_test.stdout is defined and 'DNS1_OK' in dns1_test.stdout }}"
+        dns2_ok: "{{ dns2_test.stdout is defined and 'DNS2_OK' in dns2_test.stdout }}"
+      when: ssh_ok | default(false)
+
+    - name: DNS | Ler resolv.conf
+      ansible.builtin.raw: cat /etc/resolv.conf 2>/dev/null
+      register: resolv_conf
+      when: ssh_ok | default(false)
+      changed_when: false
+
+    - name: DNS | Validar nameservers Infoblox
+      ansible.builtin.set_fact:
+        resolv_conf_ok: >-
+          {{
+            dns_ips[datacenter][0] in (resolv_conf.stdout | default(''))
+            and
+            dns_ips[datacenter][1] in (resolv_conf.stdout | default(''))
+          }}
+      when: ssh_ok | default(false)
+
+
+    # -------------------------------------------------------------------------
+    # ETAPA 4: CLASSIFICAR RESULTADO FINAL
+    # -------------------------------------------------------------------------
+    - name: RESULTADO | Classificar host
+      ansible.builtin.set_fact:
+        resultado_host:
+          ip: "{{ inventory_hostname }}"
+          so: "{{ so_detectado | default('Desconhecido') }}"
+          datacenter: "{{ datacenter }}"
+          resolv_conf_status: >-
+            {%- if resolv_conf_ok | default(false) -%}
+              RESOLV.CONF JA CORRETO
+            {%- else -%}
+              
+            {%- endif -%}
+          status: >-
+            {%- if not (ssh_ok | default(false)) -%}
+              FALHA
+            {%- elif not (dns1_ok | default(false)) or not (dns2_ok | default(false)) -%}
+              FALHA
+            {%- else -%}
+              OK
+            {%- endif -%}
+          tipo_erro: >-
+            {%- set erro_msg = ssh_erro_msg | default('') -%}
+            {%- if not (ssh_ok | default(false)) -%}
+              {%- if 'Permission denied' in erro_msg -%}
+                PERMISSAO_ROOT
+              {%- elif 'Connection refused' in erro_msg -%}
+                FIREWALL_22
+              {%- elif 'Connection timed out' in erro_msg or 'No route to host' in erro_msg -%}
+                FIREWALL_22
+              {%- elif 'Timer expired' in erro_msg or 'timed out' in erro_msg -%}
+                TIMEOUT
+              {%- else -%}
+                FIREWALL_22
+              {%- endif -%}
+            {%- elif not (dns1_ok | default(false)) or not (dns2_ok | default(false)) -%}
+              FIREWALL_53
+            {%- else -%}
+              NENHUM
+            {%- endif -%}
+          mensagem: >-
+            {%- set erro_msg = ssh_erro_msg | default('') -%}
+            {%- if not (ssh_ok | default(false)) -%}
+              {%- if 'Permission denied' in erro_msg -%}
+                Sem acesso SSH - Permission denied
+              {%- elif 'Connection refused' in erro_msg -%}
+                Porta 22 bloqueada - Connection refused
+              {%- elif 'Connection timed out' in erro_msg or 'No route to host' in erro_msg -%}
+                Sem conectividade - Timeout ou rota inexistente
+              {%- elif 'Timer expired' in erro_msg -%}
+                Timeout SSH - bash_profile lento
+              {%- else -%}
+                Falha SSH - {{ erro_msg | regex_replace('\n', ' ') | truncate(80) }}
+              {%- endif -%}
+            {%- elif not (dns1_ok | default(false)) or not (dns2_ok | default(false)) -%}
+              Porta 53 bloqueada - Solicitar regra de firewall para DNS Infoblox
+            {%- else -%}
+              OK - Conexao SSH e porta 53 validadas com sucesso
+            {%- endif -%}
+
+# =============================================================================
+# PLAY 3: GERAR RELATÓRIO E ENVIAR EMAIL
+# =============================================================================
+- name: Gerar relatorio e enviar email
+  hosts: localhost
+  gather_facts: true
+  connection: local
+
+  vars:
+    relatorio_excel: "/tmp/infoblox_linux_{{ ansible_date_time.date }}_{{ ansible_date_time.hour }}{{ ansible_date_time.minute }}.xlsx"
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # COMPILAR RESULTADOS
+    # -------------------------------------------------------------------------
+    - name: RELATORIO | Compilar todos os resultados
+      ansible.builtin.set_fact:
+        resultados: >-
+          {{
+            groups['unix'] | default([]) | map('extract', hostvars)
+            | selectattr('resultado_host', 'defined')
+            | map(attribute='resultado_host')
+            | list
+          }}
+
+    - name: RELATORIO | Adicionar hosts não processados
+      ansible.builtin.set_fact:
+        resultados: >-
+          {{
+            resultados + [{
+              'ip': item,
+              'so': 'Desconhecido',
+              'datacenter': datacenter | default('N/A'),
+              'status': 'FALHA',
+              'tipo_erro': 'NAO_PROCESSADO',
+              'resolv_conf_status': '',
+              'mensagem': 'Host nao foi processado - verificar logs'
+            }]
+          }}
+      loop: "{{ groups['unix'] | default([]) }}"
+      when: hostvars[item].resultado_host is not defined
+
+    # -------------------------------------------------------------------------
+    # CONTADORES
+    # -------------------------------------------------------------------------
+    - name: RELATORIO | Calcular contadores
+      ansible.builtin.set_fact:
+        total_hosts: "{{ resultados | length }}"
+        total_ok: "{{ resultados | selectattr('status', 'equalto', 'OK') | list | length }}"
+        total_firewall_22: "{{ resultados | selectattr('tipo_erro', 'equalto', 'FIREWALL_22') | list | length }}"
+        total_firewall_53: "{{ resultados | selectattr('tipo_erro', 'equalto', 'FIREWALL_53') | list | length }}"
+        total_permissao: "{{ resultados | selectattr('tipo_erro', 'equalto', 'PERMISSAO_ROOT') | list | length }}"
+        total_timeout: "{{ resultados | selectattr('tipo_erro', 'equalto', 'TIMEOUT') | list | length }}"
+        total_outros: "{{ resultados | selectattr('status', 'equalto', 'FALHA') | rejectattr('tipo_erro', 'in', ['FIREWALL_22', 'FIREWALL_53', 'PERMISSAO_ROOT', 'TIMEOUT']) | list | length }}"
+
+    # -------------------------------------------------------------------------
+    # GERAR PLANILHA EXCEL
+    # -------------------------------------------------------------------------
+    - name: EXCEL | Montar matriz
+      ansible.builtin.set_fact:
+        excel_matrix: >-
+          {%- set matrix = [] -%}
+          {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 1, 'cell_value': 'RELATORIO INFOBLOX LINUX - VALIDACAO DNS'}) -%}
+          {%- set _ = matrix.append({'cell_row': 3, 'cell_col': 1, 'cell_value': 'Data/Hora:'}) -%}
+          {%- set _ = matrix.append({'cell_row': 3, 'cell_col': 2, 'cell_value': ansible_date_time.date ~ ' ' ~ ansible_date_time.time}) -%}
+          {%- set _ = matrix.append({'cell_row': 4, 'cell_col': 1, 'cell_value': 'Datacenter:'}) -%}
+          {%- set _ = matrix.append({'cell_row': 4, 'cell_col': 2, 'cell_value': datacenter | default('N/A')}) -%}
+          {%- set _ = matrix.append({'cell_row': 5, 'cell_col': 1, 'cell_value': 'RDM:'}) -%}
+          {%- set _ = matrix.append({'cell_row': 5, 'cell_col': 2, 'cell_value': rdm | default('N/A')}) -%}
+          {%- set _ = matrix.append({'cell_row': 7, 'cell_col': 1, 'cell_value': 'RESUMO'}) -%}
+          {%- set _ = matrix.append({'cell_row': 8, 'cell_col': 1, 'cell_value': 'Total:'}) -%}
+          {%- set _ = matrix.append({'cell_row': 8, 'cell_col': 2, 'cell_value': total_hosts}) -%}
+          {%- set _ = matrix.append({'cell_row': 9, 'cell_col': 1, 'cell_value': 'OK:'}) -%}
+          {%- set _ = matrix.append({'cell_row': 9, 'cell_col': 2, 'cell_value': total_ok}) -%}
+          {%- set _ = matrix.append({'cell_row': 10, 'cell_col': 1, 'cell_value': 'Firewall 53:'}) -%}
+          {%- set _ = matrix.append({'cell_row': 10, 'cell_col': 2, 'cell_value': total_firewall_53}) -%}
+          {%- set _ = matrix.append({'cell_row': 11, 'cell_col': 1, 'cell_value': 'Firewall 22:'}) -%}
+          {%- set _ = matrix.append({'cell_row': 11, 'cell_col': 2, 'cell_value': total_firewall_22}) -%}
+          {%- set _ = matrix.append({'cell_row': 12, 'cell_col': 1, 'cell_value': 'Permissao:'}) -%}
+          {%- set _ = matrix.append({'cell_row': 12, 'cell_col': 2, 'cell_value': total_permissao}) -%}
+          {%- set _ = matrix.append({'cell_row': 13, 'cell_col': 1, 'cell_value': 'Timeout:'}) -%}
+          {%- set _ = matrix.append({'cell_row': 13, 'cell_col': 2, 'cell_value': total_timeout}) -%}
+          {%- set _ = matrix.append({'cell_row': 14, 'cell_col': 1, 'cell_value': 'Outros:'}) -%}
+          {%- set _ = matrix.append({'cell_row': 14, 'cell_col': 2, 'cell_value': total_outros}) -%}
+          {%- set _ = matrix.append({'cell_row': 16, 'cell_col': 1, 'cell_value': 'IP'}) -%}
+          {%- set _ = matrix.append({'cell_row': 16, 'cell_col': 2, 'cell_value': 'SO'}) -%}
+          {%- set _ = matrix.append({'cell_row': 16, 'cell_col': 3, 'cell_value': 'STATUS'}) -%}
+          {%- set _ = matrix.append({'cell_row': 16, 'cell_col': 4, 'cell_value': 'TIPO_ERRO'}) -%}
+          {%- set _ = matrix.append({'cell_row': 16, 'cell_col': 5, 'cell_value': 'RESOLV.CONF'}) -%}
+          {%- set _ = matrix.append({'cell_row': 16, 'cell_col': 6, 'cell_value': 'MENSAGEM'}) -%}
+          {%- for item in resultados -%}
+            {%- set row = loop.index + 16 -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 1, 'cell_value': item.ip}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 2, 'cell_value': item.so}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 3, 'cell_value': item.status | trim}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 4, 'cell_value': item.tipo_erro | trim}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 5, 'cell_value': item.resolv_conf_status | default('') | trim}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 6, 'cell_value': item.mensagem | trim}) -%}
+          {%- endfor -%}
+          {{ matrix }}
+
+    - name: EXCEL | Criar planilha
+      ans2dev.general.open_xl:
+        op: n
+        dest: "{{ relatorio_excel }}"
+        sheet_name: "Infoblox Linux"
+        updates_matrix: "{{ excel_matrix }}"
+
+    # -------------------------------------------------------------------------
+    # MONTAR LISTAS PARA EMAIL
+    # -------------------------------------------------------------------------
+    - name: EMAIL | Lista OK
+      ansible.builtin.set_fact:
+        lista_ok: "{% for r in resultados if r.status | trim == 'OK' %}\n- {{ r.ip }}{% endfor %}"
+
+    - name: EMAIL | Lista RESOLV.CONF JA CORRETO
+      ansible.builtin.set_fact:
+        lista_resolv_conf: >-
+          {% for r in resultados
+             if r.resolv_conf_status | default('') | trim == 'RESOLV.CONF JA CORRETO' %}
+          - {{ r.ip }}
+          {% endfor %}
+
+    - name: EMAIL | Lista FIREWALL_53
+      ansible.builtin.set_fact:
+        lista_firewall_53: "{% for r in resultados if r.tipo_erro | trim == 'FIREWALL_53' %}\n- {{ r.ip }}{% endfor %}"
+
+    - name: EMAIL | Lista FIREWALL_22
+      ansible.builtin.set_fact:
+        lista_firewall_22: "{% for r in resultados if r.tipo_erro | trim == 'FIREWALL_22' %}\n- {{ r.ip }}{% endfor %}"
+
+    - name: EMAIL | Lista PERMISSAO_ROOT
+      ansible.builtin.set_fact:
+        lista_permissao: "{% for r in resultados if r.tipo_erro | trim == 'PERMISSAO_ROOT' %}\n- {{ r.ip }}{% endfor %}"
+
+    - name: EMAIL | Lista TIMEOUT
+      ansible.builtin.set_fact:
+        lista_timeout: "{% for r in resultados if r.tipo_erro | trim == 'TIMEOUT' %}\n- {{ r.ip }}{% endfor %}"
+
+    - name: EMAIL | Lista OUTROS
+      ansible.builtin.set_fact:
+        lista_outros: "{% for r in resultados if r.status | trim == 'FALHA' and r.tipo_erro | trim not in ['FIREWALL_22', 'FIREWALL_53', 'PERMISSAO_ROOT', 'TIMEOUT'] %}\n- {{ r.ip }} | {{ r.mensagem }}{% endfor %}"
+
+    # -------------------------------------------------------------------------
+    # EXIBIR RELATÓRIO
+    # -------------------------------------------------------------------------
+    - name: RELATORIO | Exibir no console
+      ansible.builtin.debug:
+        msg: |
+          ================================================================
+          RELATORIO INFOBLOX LINUX - VALIDACAO DNS
+          ================================================================
+          Data/Hora: {{ ansible_date_time.date }} {{ ansible_date_time.time }}
+          Datacenter: {{ datacenter | default('N/A') }}
+          RDM: {{ rdm | default('N/A') }}
+          Total de hosts: {{ total_hosts }}
+          ----------------------------------------------------------------
+          OK ({{ total_ok }}):{{ lista_ok | default('\n  Nenhum') }}
+
+          RESOLV.CONF JA CORRETO:
+          {{ lista_resolv_conf | default('\n  Nenhum') }}
+
+          
+          FIREWALL PORTA 53 ({{ total_firewall_53 }}):{{ lista_firewall_53 | default('\n  Nenhum') }}
+          
+          FIREWALL PORTA 22 ({{ total_firewall_22 }}):{{ lista_firewall_22 | default('\n  Nenhum') }}
+          
+          PERMISSAO ROOT ({{ total_permissao }}):{{ lista_permissao | default('\n  Nenhum') }}
+          
+          TIMEOUT ({{ total_timeout }}):{{ lista_timeout | default('\n  Nenhum') }}
+          
+          OUTROS ({{ total_outros }}):{{ lista_outros | default('\n  Nenhum') }}
+          ================================================================
+          Planilha: {{ relatorio_excel }}
+          ================================================================
+
+    # -------------------------------------------------------------------------
+    # ENVIAR EMAIL
+    # -------------------------------------------------------------------------
+    - name: EMAIL | Enviar relatório
+      community.general.mail:
+        host: vip_smtp.claro.com.br
+        port: 25
+        from: coeeaiops@claro.com.br
+        to: "{{ email_destino }}"
+        subject: "Relatorio Infoblox Linux - {{ datacenter | default('N/A') }} - {{ ansible_date_time.date }}"
+        subtype: plain
+        attach:
+          - "{{ relatorio_excel }}"
+        body: |
+          Prezado(a),
+          
+          Segue o relatorio de validacao DNS Infoblox em servidores Linux.
+          
+          ================================================================
+          RESUMO
+          ================================================================
+          Data/Hora: {{ ansible_date_time.date }} {{ ansible_date_time.time }}
+          Datacenter: {{ datacenter | default('N/A') }}
+          RDM: {{ rdm | default('N/A') }}
+          Total de hosts: {{ total_hosts }}
+          
+          OK: {{ total_ok }}
+          ================================================
+          RESOLV.CONF JA CORRETO
+          ================================================
+          {{ lista_resolv_conf | default('\nNenhum') }}
+
+          Firewall Porta 53: {{ total_firewall_53 }}
+          Firewall Porta 22: {{ total_firewall_22 }}
+          Permissao Root: {{ total_permissao }}
+          Timeout: {{ total_timeout }}
+          Outros: {{ total_outros }}
+          
+          ================================================================
+          OK ({{ total_ok }})
+          ================================================================{{ lista_ok | default('\nNenhum') }}
+          
+          ================================================================
+          FIREWALL PORTA 53 ({{ total_firewall_53 }})
+          ================================================================{{ lista_firewall_53 | default('\nNenhum') }}
+          
+          ACAO: Solicitar liberacao TCP/UDP para DNS Infoblox na porta 53
+
+          OBSERVAÇÃO:
+
+          A validação da porta 53 depende das ferramentas disponíveis no servidor, podendo utilizar dig, nc (netcat), telnet, nmap ou bash /dev/tcp.
+          Em servidores que não possuam nenhuma dessas ferramentas, a validação poderá retornar falha sem necessariamente indicar bloqueio de firewall.
+
+          Importante: o serviço DNS normalmente utiliza UDP/53 para as consultas. Porém, quando a validação é realizada através do bash (/dev/tcp), o teste passa a depender da comunicação TCP/53.
+          Diferentemente do TCP, o UDP não possui confirmação de conexão, portanto o bash não consegue validar de forma confiável a comunicação utilizando /dev/udp. Por esse motivo, quando o servidor não possui ferramentas como dig, nc, telnet ou nmap, o teste pode acabar dependendo exclusivamente da conectividade TCP/53.
+
+          Nestes casos, para que a validação seja concluída com sucesso, pode ser necessário que a comunicação TCP/53 também esteja liberada entre o servidor e os DNS Infoblox, mesmo que a aplicação do DNS utilize predominantemente UDP/53.
+          
+          ================================================================
+          FIREWALL PORTA 22 ({{ total_firewall_22 }})
+          ================================================================{{ lista_firewall_22 | default('\nNenhum') }}
+          
+          ACAO: Verificar conectividade SSH e solicitar liberacao na porta 22
+          
+          ================================================================
+          PERMISSAO ROOT ({{ total_permissao }})
+          ================================================================{{ lista_permissao | default('\nNenhum') }}
+          
+          ACAO: Verificar privilegios de root/sudo nos servidores
+          
+          ================================================================
+          TIMEOUT ({{ total_timeout }})
+          ================================================================{{ lista_timeout | default('\nNenhum') }}
+          
+          ACAO: Verificar bash_profile lento ou aumentar timeout SSH
+          
+          ================================================================
+          OUTROS ({{ total_outros }})
+          ================================================================{{ lista_outros | default('\nNenhum') }}
+          
+          ================================================================
+          Planilha detalhada em anexo.
+          
+          Este e um email automatico gerado pelo Ansible.
+      when: 
+        - email_destino is defined 
+        - email_destino | length > 0
+
+
+
