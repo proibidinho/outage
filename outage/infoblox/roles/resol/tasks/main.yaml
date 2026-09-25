@@ -1,0 +1,16 @@
+- name: Extraindo o conteúdo do novo resolv.conf
+  ansible.builtin.raw: cat /etc/resolv.conf
+  register: resolv_info
+
+- name: Convertendo o conteúdo do resolv.conf para uma variável
+  set_fact:
+    filtered_lines: >-
+      {{
+        resolv_info.stdout_lines
+        | select('search', '^(search|nameserver) ')
+        | list
+      }}
+
+- name: Exibindo o conteúdo do novo resolv.conf
+  ansible.builtin.debug:
+    msg: "{{ filtered_lines  }}"

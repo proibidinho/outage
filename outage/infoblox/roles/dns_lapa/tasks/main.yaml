@@ -1,0 +1,94 @@
+- name: Testando conexão na porta 53 com o IP 10.29.177.81
+  ansible.builtin.raw: |
+    for ip in 10.29.177.81; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=`echo quit | telnet $ip 53 2>/dev/null`
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=`dig @$ip google.com +time=2 +tries=1`
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=`nmap -p 53 -Pn --host-timeout 5s $ip`
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_one
+
+- name: Testando conexão na porta 53 com o IP 10.53.22.102
+  ansible.builtin.raw: |
+    for ip in 10.53.22.102; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=`echo quit | telnet $ip 53 2>/dev/null`
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=`dig @$ip google.com +time=2 +tries=1`
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=`nmap -p 53 -Pn --host-timeout 5s $ip`
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_two
+
+- name: Validando os servidores que comunicaram com sucesso na porta 53
+  ansible.builtin.set_fact:
+    dns_one_ok: "{{ dns_one.stdout_lines | select('search', 'OK') | list | length > 0 }}" 
+    dns_two_ok: "{{ dns_two.stdout_lines | select('search', 'OK') | list | length > 0 }}"
+
+- name: Lista de servidores que falharam na conexão com a porta 53
+  ansible.builtin.fail:
+    msg: "❌ Porta 53 não acessível. Favor solicitar regra de firewall."
+  when: dns_one_ok == false or dns_two_ok == false
+
+- name: Lista de servidores que comunicaram com a porta 53
+  ansible.builtin.debug:
+    msg: "✅ Porta 53 comunidando."
+  when: dns_one_ok == true and dns_two_ok == true

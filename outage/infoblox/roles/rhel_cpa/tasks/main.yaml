@@ -1,0 +1,240 @@
+- name: Extraindo o conteúdo do resolv.conf antes das alterações
+  ansible.builtin.raw: cat /etc/resolv.conf
+  register: resolv_info
+
+- name: Convertendo o conteúdo do resolv.conf para uma variável
+  set_fact:
+    filtered_lines: >-
+      {{
+        resolv_info.stdout_lines
+        | select('search', '^(search|nameserver) ')
+        | list
+      }}
+
+- name: Exibindo o conteúdo do resolv.conf antes das alterações
+  ansible.builtin.debug:
+    msg: "{{ filtered_lines  }}"
+
+- name: Testando conexão na porta 53 com o IP 10.54.44.12
+  ansible.builtin.raw: |
+    for ip in 10.54.44.12; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=$(echo quit | telnet $ip 53 2>/dev/null)
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=$(dig @$ip google.com +time=2 +tries=1)
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=$(nmap -p 53 -Pn --host-timeout 5s $ip)
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_one
+
+- name: Testando conexão na porta 53 com o IP 10.29.177.82
+  ansible.builtin.raw: |
+    for ip in 10.29.177.82; do
+      echo "🔍 Testando DNS $ip:"
+
+      # Teste com nc
+      if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+        echo -n "  [nc] "
+        nc -z -w2 $ip 53 && echo "OK" || echo "FALHA"
+
+      # Fallback com telnet
+      elif command -v telnet >/dev/null 2>&1; then
+        echo -n "  [telnet] "
+        telnet_output=$(echo quit | telnet $ip 53 2>/dev/null)
+        echo "$telnet_output" | grep "Escape character" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nc/telnet] Nenhum dos dois disponível"
+      fi
+
+      # Teste com dig
+      if command -v dig >/dev/null 2>&1; then
+        echo -n "  [dig] "
+        dig_output=$(dig @$ip google.com +time=2 +tries=1)
+        echo "$dig_output" | grep "ANSWER SECTION" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [dig] dig não instalado"
+      fi
+
+      # Teste com nmap
+      if command -v nmap >/dev/null 2>&1; then
+        echo -n "  [nmap] "
+        nmap_output=$(nmap -p 53 -Pn --host-timeout 5s $ip)
+        echo "$nmap_output" | grep "53/tcp" | grep "open" >/dev/null && echo "OK" || echo "FALHA"
+      else
+        echo "  [nmap] nmap não instalado"
+      fi
+
+    done
+  register: dns_two
+
+- name: Validando os servidores que comunicaram com sucesso na porta 53
+  ansible.builtin.set_fact:
+    dns_one_sucesso: "{{ dns_one.stdout_lines | select('search', 'OK') | list | length > 0 }}"
+    dns_two_sucesso: "{{ dns_two.stdout_lines | select('search', 'OK') | list | length > 0 }}"
+
+- name: Fazendo alterações se houver comunicação na porta 53 com DNS
+  ansible.builtin.debug:
+    msg: "✅ Porta 53 acessível. Prosseguindo com a automação..."
+  when: dns_one_sucesso and dns_two_sucesso
+
+- name: Lista de servidores que falharam na conexão com a porta 53
+  ansible.builtin.debug:
+    msg: "❌ Porta 53 não acessível. Favor solicitar regra de firewall."
+  when: dns_one_sucesso == false or dns_two_sucesso == false
+
+#Configurando o resolv.conf
+- name: Verificando se o resolv.conf já foi alterado pelo Ansible
+  ansible.builtin.raw: grep -q 'ANSIBLE' /etc/resolv.conf
+  register: resolv_alterado
+  ignore_errors: true
+
+- name: Mostra resultado do grep (debug opcional)
+  ansible.builtin.debug:
+    msg: "Arquivo já foi alterado, não será mais modificado modificado."
+  when: resolv_alterado.rc == 0
+
+- name: Fazendo backup do resolv.conf (apenas servidores que passaram no teste) 
+  ansible.builtin.raw: |
+    if [ -f /etc/resolv.conf ]; then
+      cp -p /etc/resolv.conf /etc/resolv.conf.bkp-ansible
+    fi
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+# - name: Fazendo backup do resolv.conf (apenas servidores que passaram no teste) 
+#   ansible.builtin.raw: |
+#     if [ -f /etc/resolv.conf ]; then
+#       cp -p /etc/resolv.conf /etc/resolv.conf.bkp-$(date +%F-%H%M%S)
+#     fi
+#   when: dns_com_sucesso and resolv_alterado.rc != 0
+
+- name: 1-Extraindo os atributos do arquivo resolv.conf antes das alterações
+  ansible.builtin.raw: lsattr /etc/resolv.conf
+  register: atributos_antes
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 1-Exibindo os atributos do arquivo resolv.conf antes das alterações
+  ansible.builtin.debug:
+    msg: | 
+      "Atributos antes: {{ atributos_antes.stdout_lines | select('search', '/etc/resolv.conf') | list | first }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Removendo a imutabilidade do resolv.conf (caso esteja ativado)
+  ansible.builtin.raw: |
+    if command -v chattr >/dev/null 2>&1; then
+      chattr -i /etc/resolv.conf || true
+    fi
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 2-Extraindo os atributos do arquivo resolv.conf depois das alterações
+  ansible.builtin.raw: lsattr /etc/resolv.conf
+  register: atributos_depois
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 2-Exibindo os atributos do arquivo resolv.conf depois das alterações
+  ansible.builtin.debug:
+    msg: |
+       "Atributos depois: {{ atributos_depois.stdout_lines | select('search', '/etc/resolv.conf') | list | first }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Verificando se o arquivo resolv.conf é link simbólico
+  ansible.builtin.raw: |
+    if [ -L /etc/resolv.conf ]; then echo "LINK"; else echo "FILE"; fi
+  register: resolv_type
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Validando os servidores com links simbólicos
+  ansible.builtin.debug:
+    msg: "{{ resolv_type.stdout_lines | select('search', 'FILE') | list }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Removendo o link simbólico se necessário
+  ansible.builtin.raw: rm -f /etc/resolv.conf
+  when: >
+    (resolv_type.stdout_lines | default([]) | select('search', 'LINK') | list | length > 0)
+    and dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Alterando o /etc/resolv.conf
+  ansible.builtin.raw: |
+    sed -i '/^nameserver/d' /etc/resolv.conf
+    echo "# <!-- BEGIN ANSIBLE MANAGED BLOCK -->" >> /etc/resolv.conf
+    echo "nameserver 10.54.44.12" >> /etc/resolv.conf
+    echo "nameserver 10.29.177.82" >> /etc/resolv.conf
+    echo "# <!-- END ANSIBLE MANAGED BLOCK -->" >> /etc/resolv.conf
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+# - name: Alterando o /etc/resolv.conf
+#   ansible.builtin.raw: |
+#     cat > /etc/resolv.conf <<EOF
+#     # <!-- BEGIN ANSIBLE MANAGED BLOCK aap -->
+#     search claro.com.br corp.clarobr cpqcloud.corp.clarobr compute.cloud.corp.clarobr cloud.corp.clarobr nt.embratel.com.br embratel.com.br
+#     nameserver 10.54.44.12
+#     nameserver 10.29.177.82
+#     # <!-- END ANSIBLE MANAGED BLOCK aap -->
+#     EOF
+#   when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Tornando o resolv.conf imutável para evitar sobrescrita
+  ansible.builtin.raw: |
+    if command -v chattr >/dev/null 2>&1; then
+      chattr +i /etc/resolv.conf
+    fi
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 3-Extraindo os atributos do arquivo resolv.conf após todas as alterações 
+  ansible.builtin.raw: lsattr /etc/resolv.conf
+  register: atributos_final
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: 3-Exibindo os atributos do arquivo resolv.conf após todas as alterações 
+  ansible.builtin.debug:
+    msg: |
+      "Atributos finais: {{ atributos_final.stdout_lines | select('search', '/etc/resolv.conf') | list | first }}"
+  when: dns_one_sucesso and dns_two_sucesso and resolv_alterado.rc != 0
+
+- name: Extraindo o conteúdo do resolv.conf depois das alterações
+  ansible.builtin.raw: cat /etc/resolv.conf
+  register: resolv_info
+  when: dns_one_sucesso and dns_two_sucesso
+
+- name: Convertendo o conteúdo do resolv.conf para uma variável
+  set_fact:
+    filtered_lines: >-
+      {{
+        resolv_info.stdout_lines
+        | select('search', '^(search|nameserver) ')
+        | list
+      }}
+  when: dns_one_sucesso and dns_two_sucesso
+
+- name: Exibindo o conteúdo do resolv.conf depois das alterações
+  ansible.builtin.debug:
+    msg: "{{ filtered_lines  }}"
+  when: dns_one_sucesso and dns_two_sucesso

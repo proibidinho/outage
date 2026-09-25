@@ -1,0 +1,102 @@
+---
+- name: Adicionando o servidor ao inventory
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+
+    - name: Adicionando a lista de servidores ao inventory
+      include_role:
+        name: inventory
+
+- name: Ajuste do resolv.conf
+  hosts: unix
+  gather_facts: false
+
+  tasks:
+
+    - name: informar a RDM
+      ansible.builtin.debug:
+        msg: "RMD número {{ rdm }} prosseguindo com a execução"
+      run_once: true
+      delegate_to: localhost
+
+    - name: Extraindo informações do sistema operacional
+      ansible.builtin.raw: 
+        bash -c 'cat /etc/redhat-release 2>/dev/null || cat /etc/system-release 2>/dev/null || uname -s 2>/dev/null'
+      register: so_info
+      changed_when: false 
+
+    - name: Convertendo informações do sistema operacional para uma variável
+      ansible.builtin.set_fact:
+        detected_os_info: >-
+          {{
+            (so_info.stdout_lines | select('search', '.*(Red Hat|Oracle|Sun|SUSE|HP-UX|Ubuntu|AIX|CentOS|Debian).*') | list | first)
+            | default('Unknown OS')
+          }}
+
+    - name: Exibindo informações do sistema operacional
+      ansible.builtin.debug:
+        msg: "Sistema Operacional Detectado: {{ detected_os_info }}"
+  
+    #Datacenter Mackenzie
+    - name: Aplicando tasks em sistemas Red Hat
+      include_role:
+        name: dns_mck
+      when: conexao == 'validation' and datacenter == 'Mackenzie'
+
+    #Datacenter Lapa
+    - name: Aplicando tasks em sistemas Red Hat
+      include_role:
+        name: dns_lapa
+      when: conexao == 'validation' and datacenter == 'Lapa'
+
+    #Datacenter Campinas
+    - name: Aplicando tasks em sistemas Red Hat
+      include_role:
+        name: dns_cpa
+      when: conexao == 'validation' and datacenter == 'Campinas'
+
+    #Datacenter Mackenzie
+    - name: Aplicando tasks em sistemas Red Hat 
+      include_role:
+        name: rhel_mck
+      when: detected_os_info is search('Red Hat') and conexao == 'deploy' and datacenter == 'Mackenzie'
+
+    - name: Aplicando tasks em sistemas SunOS 
+      include_role:
+        name: sunos_mck
+      when: detected_os_info is search('SunOS') and conexao == 'deploy' and datacenter == 'Mackenzie'
+
+    #Datacenter Lapa
+    - name: Aplicando tasks em sistemas Red Hat 
+      include_role:
+        name: rhel_lapa
+      when: detected_os_info is search('Red Hat') and conexao == 'deploy' and datacenter == 'Lapa'
+
+    - name: Aplicando tasks em sistemas SunOS 
+      include_role:
+        name: sunos_lapa
+      when: detected_os_info is search('SunOS') and conexao == 'deploy' and datacenter == 'Lapa'
+
+    #Datacenter Campinas
+    - name: Aplicando tasks em sistemas Red Hat 
+      include_role:
+        name: rhel_cpa
+      when: detected_os_info is search('Red Hat') and conexao == 'deploy' and datacenter == 'Campinas'
+
+    - name: Aplicando tasks em sistemas SunOS 
+      include_role:
+        name: sunos_cpa
+      when: detected_os_info is search('SunOS') and conexao == 'deploy' and datacenter == 'Campinas'
+
+    #Rollback todods os datacenters
+    - name: Aplicando tasks em sistemas Red Hat 
+      include_role:
+        name: rhel_rollback
+      when: detected_os_info is search('Red Hat') and conexao == 'rollback'
+
+    - name: Aplicando tasks em sistemas SunOS 
+      include_role:
+        name: sunos_rollback
+      when: detected_os_info is search('SunOS') and conexao == 'rollback'
