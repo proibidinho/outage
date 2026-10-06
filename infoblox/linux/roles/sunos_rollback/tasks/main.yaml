@@ -1,0 +1,13 @@
+- name: Rollback do resolv.conf (restaura a partir do backup)
+  ansible.builtin.raw: |
+    if [ -f /etc/resolv.conf.bkp-ansible ]; then
+      cp -p /etc/resolv.conf.bkp-ansible /etc/resolv.conf
+    fi
+
+- name: Extraindo o conteúdo do novo resolv.conf
+  ansible.builtin.raw: cat /etc/resolv.conf
+  register: resolv_info
+
+- name: Exibindo o conteúdo do novo resolv.conf
+  ansible.builtin.debug:
+    var: resolv_info.stdout_lines

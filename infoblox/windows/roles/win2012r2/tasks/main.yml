@@ -1,0 +1,267 @@
+---
+# =============================================================================
+# ROLE: Windows Server 2012 R2 - DNS Infoblox
+# Usa netsh e WMI (PowerShell limitado nessa versão)
+# =============================================================================
+
+# -------------------------------------------------------------------------
+# DEPLOY MODE
+# -------------------------------------------------------------------------
+- name: "WIN2012R2 | DEPLOY | Criar diretório de backup"
+  ansible.windows.win_file:
+    path: "{{ backup_dir }}"
+    state: directory
+  when: funcao == 'deploy'
+  ignore_errors: true
+
+- name: "WIN2012R2 | DEPLOY | Backup da configuração DNS"
+  ansible.windows.win_shell: |
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $backupFile = "{{ backup_dir }}\dns_backup_$timestamp.txt"
+    netsh interface ip show dns > $backupFile
+    $adapters = Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled -eq $true }
+    $backupData = @()
+    foreach ($adapter in $adapters) {
+      $dns = $adapter.DNSServerSearchOrder -join ","
+      if (-not $dns) { $dns = "DHCP" }
+      Add-Content $backupFile "ADAPTER:$($adapter.InterfaceIndex)|$dns"
+    }
+    Write-Output $backupFile
+  register: backup_result
+  when: funcao == 'deploy'
+  ignore_errors: true
+
+# - name: "WIN2012R2 | DEPLOY | Configurar DNS via netsh"
+#   ansible.windows.win_shell: |
+#     $adapters = Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled -eq $true }
+#     $total = ($adapters | Measure-Object).Count
+#     $ok = 0
+#     foreach ($adapter in $adapters) {
+#       try {
+#         $result = $adapter.SetDNSServerSearchOrder(@("{{ dns_infoblox[datacenter_final | default(datacenter)].primario }}","{{ dns_infoblox[datacenter_final | default(datacenter)].secundario }}"))
+#         if ($result.ReturnValue -eq 0) { $ok++ }
+#       } catch {}
+#     }
+#     Write-Output "TOTAL=$total"
+#     Write-Output "OK=$ok"
+#     if ($ok -eq $total -and $total -gt 0) {
+#       Write-Output "CONFIG_OK"
+#     } else {
+#       Write-Output "CONFIG_FALHA"
+#     }
+#   register: set_dns
+#   when: funcao == 'deploy'
+#   ignore_errors: true
+
+- name: "WIN2012R2 | DEPLOY | Configurar DNS via netsh"
+  ansible.windows.win_shell: |
+    $allAdapters = Get-WmiObject Win32_NetworkAdapterConfiguration |
+      Where-Object { $_.IPEnabled -eq $true }
+
+    $adapters = $allAdapters |
+      Where-Object { $_.DHCPEnabled -eq $false }
+
+    $dhcpCount = ($allAdapters | Where-Object { $_.DHCPEnabled -eq $true } | Measure-Object).Count
+
+    if (($adapters | Measure-Object).Count -eq 0) {
+      Write-Output "SOMENTE_DHCP"
+      exit 0
+    }
+
+    $total = ($adapters | Measure-Object).Count
+    $ok = 0
+
+    foreach ($adapter in $adapters) {
+      try {
+        $result = $adapter.SetDNSServerSearchOrder(@(
+          "{{ dns_infoblox[datacenter_final | default(datacenter)].primario }}",
+          "{{ dns_infoblox[datacenter_final | default(datacenter)].secundario }}"
+        ))
+
+        if ($result.ReturnValue -eq 0) {
+          $ok++
+        }
+      }
+      catch {}
+    }
+
+    Write-Output "TOTAL=$total"
+    Write-Output "OK=$ok"
+    Write-Output "DHCP=$dhcpCount"
+
+    if ($ok -eq $total -and $total -gt 0) {
+      Write-Output "CONFIG_OK"
+    }
+    else {
+      Write-Output "CONFIG_FALHA"
+    }
+  register: set_dns
+  when: funcao == 'deploy'
+  ignore_errors: true
+
+- name: "WIN2012R2 | DEPLOY | Limpar cache DNS"
+  ansible.windows.win_shell: ipconfig /flushdns
+  when: funcao == 'deploy'
+  ignore_errors: true
+
+- name: "WIN2012R2 | DEPLOY | Verificar nova configuração"
+  ansible.windows.win_shell: |
+    $adapter = Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled -eq $true } | Select-Object -First 1
+    if ($adapter -and $adapter.DNSServerSearchOrder) {
+      Write-Output ($adapter.DNSServerSearchOrder -join ",")
+    } else {
+      Write-Output "DHCP"
+    }
+  register: dns_novo
+  when: funcao == 'deploy'
+  ignore_errors: true
+
+- name: "WIN2012R2 | DEPLOY | Registrar resultado"
+  ansible.builtin.set_fact:
+    resultado_host:
+      ip: "{{ inventory_hostname }}"
+      so: "Windows Server 2012 R2"
+      datacenter: "{{ datacenter }}"
+      funcao: "{{ funcao }}"
+      winrm: "OK"
+      porta_53: "OK"
+      admin_local: "OK"
+      # status: "{{ 'OK' if set_dns.stdout is defined and 'CONFIG_OK' in set_dns.stdout else 'FALHA' }}"
+      # tipo_erro: "{{ 'NENHUM' if set_dns.stdout is defined and 'CONFIG_OK' in set_dns.stdout else 'CONFIG_DNS' }}"
+      # mensagem: >-
+      #   {%- if set_dns.stdout is defined and 'CONFIG_OK' in set_dns.stdout -%}
+      #     DNS configurado: {{ dns_infoblox[datacenter_final | default(datacenter)].primario }},{{ dns_infoblox[datacenter_final | default(datacenter)].secundario }}
+      #   {%- else -%}
+      #     Erro ao configurar DNS - verificar logs
+      #   {%- endif -%}
+      # dns_atual: "{{ dns_novo.stdout | default('N/A') | trim }}"
+
+      status: >-
+        {% if set_dns.stdout is defined and 'SOMENTE_DHCP' in set_dns.stdout %}
+        SKIPPED
+        {% elif set_dns.stdout is defined and 'CONFIG_OK' in set_dns.stdout %}
+        OK
+        {% else %}
+        FALHA
+        {% endif %}
+
+      tipo_erro: >-
+        {% if set_dns.stdout is defined and 'SOMENTE_DHCP' in set_dns.stdout %}
+        DHCP
+        {% elif set_dns.stdout is defined and 'CONFIG_OK' in set_dns.stdout %}
+        NENHUM
+        {% else %}
+        CONFIG_DNS
+        {% endif %}
+
+      mensagem: >-
+        {% if set_dns.stdout is defined and 'SOMENTE_DHCP' in set_dns.stdout %}
+        Servidor utiliza DHCP. Nenhuma alteração realizada.
+        {% elif set_dns.stdout is defined and 'CONFIG_OK' in set_dns.stdout %}
+        DNS configurado: {{ dns_infoblox[datacenter_final | default(datacenter)].primario }},{{ dns_infoblox[datacenter_final | default(datacenter)].secundario }}
+        {% else %}
+        Erro ao configurar DNS - verificar logs
+        {% endif %}
+    when: funcao == 'deploy'
+
+# -------------------------------------------------------------------------
+# ROLLBACK MODE
+# -------------------------------------------------------------------------
+# - name: "WIN2012R2 | ROLLBACK | Restaurar DNS para DHCP"
+#   ansible.windows.win_shell: |
+#     $adapters = Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled -eq $true }
+#     $total = ($adapters | Measure-Object).Count
+#     $ok = 0
+#     foreach ($adapter in $adapters) {
+#       try {
+#         $result = $adapter.SetDNSServerSearchOrder($null)
+#         if ($result.ReturnValue -eq 0 -or $result.ReturnValue -eq 1) { $ok++ }
+#       } catch {}
+#     }
+#     Write-Output "TOTAL=$total OK=$ok"
+#     if ($ok -eq $total -and $total -gt 0) {
+#       Write-Output "ROLLBACK_OK"
+#     } else {
+#       Write-Output "ROLLBACK_FALHA"
+#     }
+#   register: rollback_result
+#   when: funcao == 'rollback'
+#   ignore_errors: true
+
+- name: "WIN2012R2 | ROLLBACK | Restaurar DNS para DHCP"
+  ansible.windows.win_shell: |
+    $allAdapters = Get-WmiObject Win32_NetworkAdapterConfiguration |
+      Where-Object { $_.IPEnabled -eq $true }
+
+    $adapters = $allAdapters |
+      Where-Object { $_.DHCPEnabled -eq $false }
+
+    if (($adapters | Measure-Object).Count -eq 0) {
+      Write-Output "SOMENTE_DHCP"
+      exit 0
+    }
+
+    $total = ($adapters | Measure-Object).Count
+    $ok = 0
+
+    foreach ($adapter in $adapters) {
+      try {
+        $result = $adapter.SetDNSServerSearchOrder($null)
+
+        if ($result.ReturnValue -eq 0 -or $result.ReturnValue -eq 1) {
+          $ok++
+        }
+      }
+      catch {}
+    }
+
+    Write-Output "TOTAL=$total"
+    Write-Output "OK=$ok"
+
+    if ($ok -eq $total -and $total -gt 0) {
+      Write-Output "ROLLBACK_OK"
+    }
+    else {
+      Write-Output "ROLLBACK_FALHA"
+    }
+  register: rollback_result
+  when: funcao == 'rollback'
+  ignore_errors: true
+
+- name: "WIN2012R2 | ROLLBACK | Limpar cache DNS"
+  ansible.windows.win_shell: ipconfig /flushdns
+  when: funcao == 'rollback'
+  ignore_errors: true
+
+- name: "WIN2012R2 | ROLLBACK | Verificar configuração"
+  ansible.windows.win_shell: |
+    $adapter = Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled -eq $true } | Select-Object -First 1
+    if ($adapter -and $adapter.DNSServerSearchOrder) {
+      Write-Output ($adapter.DNSServerSearchOrder -join ",")
+    } else {
+      Write-Output "DHCP"
+    }
+  register: dns_pos_rollback
+  when: funcao == 'rollback'
+  ignore_errors: true
+
+- name: "WIN2012R2 | ROLLBACK | Registrar resultado"
+  ansible.builtin.set_fact:
+    resultado_host:
+      ip: "{{ inventory_hostname }}"
+      so: "Windows Server 2012 R2"
+      datacenter: "{{ datacenter }}"
+      funcao: "{{ funcao }}"
+      winrm: "OK"
+      porta_53: "N/A"
+      admin_local: "N/A"
+      status: "{{ 'OK' if rollback_result.stdout is defined and 'ROLLBACK_OK' in rollback_result.stdout else 'FALHA' }}"
+      tipo_erro: "{{ 'NENHUM' if rollback_result.stdout is defined and 'ROLLBACK_OK' in rollback_result.stdout else 'ROLLBACK_FALHOU' }}"
+      mensagem: >-
+        {%- if rollback_result.stdout is defined and 'ROLLBACK_OK' in rollback_result.stdout -%}
+          Rollback OK - DNS restaurado para DHCP
+        {%- else -%}
+          Erro no rollback - verificar logs
+        {%- endif -%}
+      dns_atual: "{{ dns_pos_rollback.stdout | default('N/A') | trim }}"
+  when: funcao == 'rollback'
