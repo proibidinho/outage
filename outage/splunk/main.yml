@@ -1,540 +1,669 @@
+## Self-Healing EDA — Migração de Webhook (push) para Busca Ativa (polling no Splunk)
+
+**Tipo:** Automação de Infra (Ansible / Event-Driven Ansible no AAP 2.5+). Não é app web/mobile.
+
+### O que muda (resumo honesto)
+- Hoje: `ansible.eda.webhook` = Splunk empurra o alerta. Padrão recomendado pela Red Hat.
+- Novo pedido: EDA consulta o índice do Splunk via macro + token (REST API 8089) a cada 1 min = **busca ativa (scraper)**.
+- **Não existe source nativo de polling do Splunk na Red Hat.** Precisa de **source plugin custom em Python**.
+- **Aviso registrado:** busca ativa NÃO resolve "perda de eventos" melhor que webhook (ambos são in-memory; reinício da activation perde a janela em voo). Quem resolve isso de verdade no AAP 2.5 é **Event Stream** ou **Kafka**. Seguimos com busca ativa por decisão operacional (analista só entrega macro+token).
+
+### Decisões travadas (suas respostas)
+- Ambiente: AAP 2.5+ (usar Rulebook Activation + credencial pro token).
+- Token: REST API do Splunk (Bearer), endpoint `search/jobs`.
+- Intervalo: 60s. Rede até 8089 assumida OK.
+- Dedup: `episode_id` é único/estável → chave de dedup. Remediação repetida (ex: limpar /var 2x) é aceitável, mas mesmo assim vamos deduplicar pra não spammar.
+
+---
+
+### Edge cases que você PRECISA tratar (já resolvidos no rulebook abaixo)
+1. **Nomes de campo:** o search do Splunk tem que devolver os campos EXATAMENTE como o rulebook lê: `alertTitle, entityOS, diskPath, entityLocation, entityName, entityIC, episodeId`. Se no índice tiverem outro nome, renomeie no SPL (`| rename x as entityIC`).
+2. **Gap de borda:** poll a cada 60s mas buscar `earliest=-90s` (janela maior que o intervalo) pra não perder evento na virada. O overlap gera duplicatas → resolvidas pelo `throttle`.
+3. **Dedup:** `throttle: once_within` + `group_by_attributes: [event.payload.episodeId]` em toda rule. Evita disparar o mesmo self-healing repetido dentro da janela.
+4. **Reinício da activation:** `throttle` também é in-memory → após restart pode haver 1 duplicata. Você disse que re-limpar /var é aceitável, então OK.
+5. **SSL 8089:** normalmente cert self-signed → parametrizei `verify_ssl` (comece `false`, ideal apontar `cafile`).
+6. **Token expira/rotaciona:** guarde como *credential* no AAP, não em texto puro no rulebook.
+7. **Fuso/tempo:** `earliest/latest` usam o horário do servidor Splunk. Confirme com o analista.
+8. **Volume:** se a macro retornar muitos eventos por ciclo, use search job normal com paginação (não `oneshot`).
+
+---
+
+### PASSO 1 — Source plugin custom (arquivo Python)
+Coloque no projeto do AAP em: `extensions/eda/plugins/event_source/splunk_search.py`
+
+```python
+"""
+Source plugin custom: BUSCA ATIVA no Splunk via REST API (search/jobs).
+Roda a macro que o analista te passar, a cada <interval> segundos,
+e joga cada resultado na fila do EDA como event.payload.*
+
+Requisitos: aiohttp instalado no EE (Execution Environment).
+"""
+import asyncio
+from typing import Any
+import aiohttp
+
+async def main(queue: asyncio.Queue, args: dict[str, Any]) -> None:
+    host       = args["host"]                       # ex: splunk.suaempresa.com
+    port       = int(args.get("port", 8089))        # REST API
+    token      = args["token"]                      # Bearer da REST API (via credential)
+    macro      = args["macro"]                      # macro que o analista passar (sem crases)
+    interval   = int(args.get("interval", 60))      # 60s
+    lookback   = args.get("lookback", "-90s")       # janela > intervalo (evita gap)
+    verify_ssl = bool(args.get("verify_ssl", False))
+
+    base    = f"https://{host}:{port}"
+    headers = {"Authorization": f"Bearer {token}"}
+    # A macro é invocada com crases. Garanta que ela devolve os campos
+    # alertTitle, entityOS, diskPath, entityLocation, entityName, entityIC, episodeId
+    spl = f"search `{macro}` earliest={lookback} latest=now"
+
+    while True:
+        try:
+            async with aiohttp.ClientSession(headers=headers) as sess:
+                data = {"search": spl, "output_mode": "json", "exec_mode": "oneshot"}
+                async with sess.post(f"{base}/services/search/jobs",
+                                     data=data, ssl=verify_ssl) as resp:
+                    resp.raise_for_status()
+                    body = await resp.json()
+            for row in body.get("results", []):
+                await queue.put({"payload": row})   # vira event.payload no rulebook
+        except Exception as e:
+            # loga e segue; nao deixa a main morrer (isso pararia o rulebook)
+            print(f"[splunk_search] erro no ciclo: {e}")
+        await asyncio.sleep(interval)
+```
+
+---
+
+### PASSO 2 — Rulebook (comentado/legendado, só preencher)
+Troque APENAS o bloco `sources`. As `rules` são as suas, com `throttle` de dedup adicionado.
+
+```yaml
+---
 - name: Regras para servidores Linux
   hosts: EDA
+
+  # =====================================================================
+  # FONTE: BUSCA ATIVA (polling) no Splunk via REST API 8089
+  # Antes era ansible.eda.webhook (push). Agora o EDA vai buscar sozinho.
+  # >>> PREENCHER host / port / token(credential) / macro <<<
+  # =====================================================================
   sources:
-  - ansible.eda.webhook:
-      host: 0.0.0.0
-      port: 5001
-#o analista splunk quer me passar uma macro de search e um token para eu memso ir buscar nos indices do splunk que contem alertas elegiveis para os selfhealings abaixo
+    - name: splunk_busca_ativa
+      # caminho do plugin custom: extensions/eda/plugins/event_source/splunk_search.py
+      ansible.eda.splunk_search:          # <-- ajuste p/ o namespace/coleção onde você publicar o plugin
+        host: "{{ SPLUNK_HOST }}"         # ex: splunk.suaempresa.com
+        port: 8089                        # REST API do Splunk
+        token: "{{ SPLUNK_REST_TOKEN }}"  # Bearer -> usar CREDENTIAL do AAP, nao hardcode
+        macro: "{{ SPLUNK_MACRO }}"       # macro que o analista te passar (sem crases)
+        interval: 60                      # de quanto em quanto tempo busca (segundos)
+        lookback: "-90s"                  # janela MAIOR que interval p/ nao perder evento na borda
+        verify_ssl: false                 # ideal: apontar cafile e ligar validacao
+
   rules:
 
+    # ---- DEDUP GLOBAL: cada rule usa episode_id como chave -------------
+    # 'once_within' = nao redispara o mesmo episodeId dentro da janela.
+    # Ajuste a janela conforme quanto tempo o alerta persiste no indice.
 
-  - name: Sinônimo inconsistente NBA
-    condition: >
-      event.payload.alertTitle is search("sinonimo_invalido", ignorecase=true)
+    - name: Sinônimo inconsistente NBA
+      condition: >
+        event.payload.alertTitle is search("sinonimo_invalido", ignorecase=true)
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.payload.episodeId
+      action:
+        run_workflow_template:
+          name: "[WORKFLOW] - NBA - Corrigir Sinonimo"
+          organization: "ORG-CLBR-TI-OPS-QOD-CHECKAI"
+          job_args:
+            extra_vars:
+              alert_name: "{ event.payload.alertTitle }"
+              objeto_corrigir: "{ event.payload.entityName }"
+              episode_id: "{ event.payload.episodeId }"
 
-    action:
-      run_workflow_template:
-        name: "[WORKFLOW] - NBA - Corrigir Sinonimo"
-        organization: "ORG-CLBR-TI-OPS-QOD-CHECKAI"
-        job_args:
-          extra_vars:
-            alert_name: "{{ event.payload.alertTitle }}"
-            objeto_corrigir: "{{ event.payload.entityName }}"
-            episode_id: "{{ event.payload.episodeId }}"
+    - name: Disco /var acima de 85% em Lapa
+      condition: |
+        event.payload.entityOS == "LINUX" and
+        event.payload.diskPath is search("^/var$", ignorecase=true) and
+        event.payload.entityLocation is search("LAPA", ignorecase=true)
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.payload.episodeId
+      action:
+        run_workflow_template:
+          name: "[WORKFLOW] - Limpeza /var - Lapa"
+          organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
+          job_args:
+            extra_vars:
+              alert_name: "{ event.payload.alertTitle }"
+              name: "{ event.payload.entityName }"
+              location: "{ event.payload.entityLocation }"
+              server: "{ event.payload.entityIC }"
+              episode_id: '{ event.payload.episodeId }'
 
-  - name: Disco /var acima de 85% em Lapa
-    condition: |
-      event.payload.entityOS == "LINUX" and
-      event.payload.diskPath is search("^/var$", ignorecase=true) and
-      event.payload.entityLocation is search("LAPA", ignorecase=true)
-    action:
-      run_workflow_template:
-        name: "[WORKFLOW] - Limpeza /var - Lapa"
-        organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
-        job_args:
-          extra_vars:
-            alert_name: "{{ event.payload.alertTitle }}"
-            name: "{{ event.payload.entityName }}"
-            location: "{{ event.payload.entityLocation }}"
-            server: "{{ event.payload.entityIC }}"
-            episode_id: '{{ event.payload.episodeId }}' 
+    - name: Disco /var acima de 85% em Campinas
+      condition: |
+        event.payload.entityOS == "LINUX" and
+        event.payload.diskPath is search("^/var$", ignorecase=true) and
+        (
+          event.payload.entityLocation is search("CAMPINAS", ignorecase=true) or
+          event.payload.entityLocation is search("OCI-NM-NM", ignorecase=true)
+        )
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.payload.episodeId
+      action:
+        run_workflow_template:
+          name: "[WORKFLOW] - Limpeza /var - Campinas"
+          organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
+          job_args:
+            extra_vars:
+              alert_name: "{ event.payload.alertTitle }"
+              name: "{ event.payload.entityName }"
+              location: "{ event.payload.entityLocation }"
+              server: "{ event.payload.entityIC }"
+              episode_id: '{ event.payload.episodeId }'
 
-  # - name: Disco /var acima de 85% em Campinas
-  #   condition: |
-  #     event.payload.entityOS == "LINUX" and
-  #     event.payload.diskPath is search("^/var$", ignorecase=true) and
-  #     event.payload.entityLocation is search("CAMPINAS", ignorecase=true)
-  #   action:
-  #     run_workflow_template:
-  #       name: "[WORKFLOW] - Limpeza /var - Campinas"
-  #       organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
-  #       job_args:
-  #         extra_vars:
-  #           alert_name: "{{ event.payload.alertTitle }}"
-  #           name: "{{ event.payload.entityName }}"
-  #           location: "{{ event.payload.entityLocation }}"
-  #           server: "{{ event.payload.entityIC }}"
-  #           episode_id: '{{ event.payload.episodeId }}'
-
-  - name: Disco /var acima de 85% em Campinas
-    condition: |
-      event.payload.entityOS == "LINUX" and
-      event.payload.diskPath is search("^/var$", ignorecase=true) and
-      (
-        event.payload.entityLocation is search("CAMPINAS", ignorecase=true) or
-        event.payload.entityLocation is search("OCI-NM-NM", ignorecase=true)
-      )
-    action:
-      run_workflow_template:
-        name: "[WORKFLOW] - Limpeza /var - Campinas"
-        organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
-        job_args:
-          extra_vars:
-            alert_name: "{{ event.payload.alertTitle }}"
-            name: "{{ event.payload.entityName }}"
-            location: "{{ event.payload.entityLocation }}"
-            server: "{{ event.payload.entityIC }}"
-            episode_id: '{{ event.payload.episodeId }}'
-
-
-  - name: Disco /var acima de 85% em Mackenzie
-    condition: |
-      event.payload.entityOS == "LINUX" and
-      event.payload.diskPath is search("^/var$", ignorecase=true) and
-      event.payload.entityLocation is search("MACKENZIE", ignorecase=true)
-    action:
-      run_workflow_template:
-        name: "[WORKFLOW] - Limpeza /var - Mackenzie"
-        organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
-        job_args:
-          extra_vars:
-            alert_name: "{{ event.payload.alertTitle }}"
-            name: "{{ event.payload.entityName }}"
-            location: "{{ event.payload.entityLocation }}"
-            server: "{{ event.payload.entityIC }}"
-            episode_id: '{{ event.payload.episodeId }}'
-
-
-  - name: Disco /opt/agent nos servidores Brux2334 e Brux2335 em Campinas
-    condition: |
-      event.payload.entityOS == "LINUX" and
-      event.payload.diskPath is search("^/opt/agent$", ignorecase=true) and
-      event.payload.entityLocation is search("CAMPINAS", ignorecase=true) and
-      (
-        event.payload.entityName is search("BRUX233[45]", ignorecase=true) or
-        event.payload.entityIC   is search("BRUX233[45]", ignorecase=true) or
-        event.payload.entityIC   is search("172\\.30\\.56\\.10[23]", ignorecase=true)
-      )
-    action:
-      run_workflow_template:
-        name: "[WORKFLOW] - Limpeza /opt/agent - Campinas"
-        organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
-        job_args:
-          extra_vars:
-            alert_name: "{{ event.payload.alertTitle }}"
-            name: "{{ event.payload.entityName }}"
-            location: "{{ event.payload.entityLocation }}"
-            server: "{{ event.payload.entityIC }}"
-            episode_id: '{{ event.payload.episodeId }}'
-
-
-
-
-
-
-  # - name: Linux /opt/agent em CAMPINAS (GLOBAL)
-  #   condition: |
-  #     event.payload.entityOS == "LINUX" and
-  #     event.payload.diskPath is search("^/opt/agent$", ignorecase=true) and
-  #     event.payload.entityLocation is search("CAMPINAS", ignorecase=true)
-  #   action:
-  #     run_workflow_template:
-  #       name: "[WORKFLOW] - Limpeza /opt/agent - Campinas"
-  #       organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
-  #       job_args:
-  #         extra_vars:
-  #           alert_title: "{{ event.payload.alertTitle }}"
-  #           name: "{{ event.payload.entityName }}"
-  #           location: "{{ event.payload.entityLocation }}"
-  #           server: "{{ event.payload.entityIC }}"
-
-
-
-  # - name: Fallback - /opt/agent (exceções e hosts não homologados)
-  #   condition: |
-  #     event.payload.diskPath is search("^/opt/agent", ignorecase=true) and
-  #     not (
-  #       event.payload.entityOS == "LINUX" and
-  #       event.payload.diskPath is search("^/opt/agent$", ignorecase=true) and
-  #       event.payload.entityLocation is search("CAMPINAS", ignorecase=true) and
-  #       (
-  #         event.payload.entityName is search("BRUX233[45]", ignorecase=true) or
-  #         event.payload.entityIC   is search("BRUX233[45]", ignorecase=true) or
-  #         event.payload.entityIC   is search("172\\.30\\.56\\.10[23]", ignorecase=true)
-  #       )
-  #     )
-  #   action:
-  #     run_job_template:
-  #       name: "fallback-splunk"
-  #       organization: "ORG-CLBR-TI-OPS-IT-SERVICE-AUTOMATION"
-  #       job_args:
-  #         extra_vars:
-  #           alert_name: "{{ event.payload.alertTitle }}"
-  #           system: "{{ event.payload.entityOS }}"
-  #           name: "{{ event.payload.entityName }}"
-  #           location: "{{ event.payload.entityLocation }}"
-  #           server: "{{ event.payload.entityIC }}"
-  #           episode_id: "{{ event.payload.episodeId | default('N/A') }}"
-
-#Criar o workflow
-  # - name: Verificar agentes Zabbix indisponíveis Linux DC-LAPA
-  #   condition: |
-  #     (event.payload.entityOS is search("LINUX", case_sensitive=false, ignorecase=true) and
-  #     event.payload.entityLocation is search("LAPA", case_sensitive=false, ignorecase=true) and
-  #     event.payload is search("ZABBIX AGENT", case_sensitive=false, ignorecase=true)
-  #   action:
-  #     run_workflow_template:
-  #       name: "[WORKFLOW] - Restart Zabbix - Mackenzie"
-  #       organization: "ORG-CLBR-TI-OPS-IT-SERVICE-MONITORING"
-  #       job_args:
-  #         extra_vars:
-  #           system: "{{ event.payload.entityOS }}"
-  #           name: "{{ event.payload.entityName }}"
-  #           location: "{{ event.payload.entityLocation }}"
-  #           episode_id: "{{ event.payload.episodeId }}"
-  #           server: "{{ event.payload.entityName.split(' | ')[1] }}"
-
-
-  # - name: Verificar agentes Zabbix indisponíveis Linux DC-CAMPINAS
-  #   condition: |
-  #     (event.payload.entityOS is search("LINUX", case_sensitive=false, ignorecase=true) and
-  #     event.payload.entityLocation is search("CAMPINAS", case_sensitive=false, ignorecase=true) and
-  #     event.payload is search("ZABBIX AGENT", case_sensitive=false, ignorecase=true)
-  #   action:
-  #     run_workflow_template:
-  #       name: "[WORKFLOW] - Restart Zabbix - Mackenzie"
-  #       organization: "ORG-CLBR-TI-OPS-IT-SERVICE-MONITORING"
-  #       job_args:
-  #         extra_vars:
-  #           system: "{{ event.payload.entityOS }}"
-  #           name: "{{ event.payload.entityName }}"
-  #           location: "{{ event.payload.entityLocation }}"
-  #           episode_id: "{{ event.payload.episodeId }}"
-  #           server: "{{ event.payload.entityName.split(' | ')[1] }}"
-
-  # - name: Verificar agentes Zabbix indisponíveis Linux DC-MACKENZIE
-  #   condition: |
-  #     (event.payload.entityOS is search("LINUX", case_sensitive=false, ignorecase=true) and
-  #     event.payload.entityLocation is search("MACKENZIE", case_sensitive=false, ignorecase=true) and
-  #     event.payload is search("ZABBIX AGENT", case_sensitive=false, ignorecase=true)
-  #   action:
-  #     run_workflow_template:
-  #       name: "[WORKFLOW] - Restart Zabbix - Mackenzie"
-  #       organization: "ORG-CLBR-TI-OPS-IT-SERVICE-MONITORING"
-  #       job_args:
-  #         extra_vars:
-  #           system: "{{ event.payload.entityOS }}"
-  #           name: "{{ event.payload.entityName }}"
-  #           location: "{{ event.payload.entityLocation }}"
-  #           episode_id: "{{ event.payload.episodeId }}"
-  #           server: "{{ event.payload.entityName.split(' | ')[1] }}"
-
-  
-
-  # - name: Verificar Kibana e Elastic Lapa
-  #   condition: |
-  #     (event.payload.entityOS is search("LINUX", case_sensitive=false, ignorecase=true)) and
-  #     (event.payload.alertTitle != "FAILURE RATE INCREASE") and
-  #     (event.payload.entityLocation is search("LAPA", case_sensitive=false, ignorecase=true)) and
-  #     (event.payload.entityName is search("KIBANA", case_sensitive=false, ignorecase=true) or
-  #     event.payload.entityName is search("ELASTIC", case_sensitive=false, ignorecase=true))
-  #   action:
-  #     run_workflow_template:
-  #       name: "[WORKFLOW] SelfHealing - ELK - Lapa"
-  #       organization: "ORG-CLBR-TI-OPS-IT-SERVICE-AUTOMATION"
-  #       job_args:
-  #         extra_vars:
-  #           system: "{{ event.payload.entityOS }}"
-  #           name: "{{ event.payload.entityName }}"
-  #           location: "{{ event.payload.entityLocation }}"
-  #           episode_id: "{{ event.payload.episodeId }}"
-  #           server: "{{ event.payload.entityIC }}"
-
-  - name: Tenable Agent (Linux) indisponível - Lapa
-    condition: |
-      event.payload.entityOS == "LINUX" and
-      event.payload.entityLocation is search("LAPA", ignorecase=true) and
-      (
-        event.payload.alertTitle  is search("tenable|nessus", ignorecase=true) or
-        event.payload.entityName  is search("tenable|nessus", ignorecase=true)
-      )
-    action:
-      run_workflow_template:
-        name: "[WORKFLOW] - Restart Tenable Linux - Lapa"
-        organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
-        job_args:
-          extra_vars:
-            alert_name: "{{ event.payload.alertTitle }}"
-            name: "{{ event.payload.entityName }}"
-            location: "{{ event.payload.entityLocation }}"
-            server: "{{ event.payload.entityIC }}"
-            episode_id: "{{ event.payload.episodeId | default('N/A') }}"
-
-  - name: Tenable Agent (Linux) indisponível - Campinas
-    condition: |
-      event.payload.entityOS == "LINUX" and
-      (
-        event.payload.entityLocation is search("CAMPINAS", ignorecase=true) or
-        event.payload.entityLocation is search("OCI-NM-NM", ignorecase=true)
-      ) and
-      (
-        event.payload.alertTitle  is search("tenable|nessus", ignorecase=true) or
-        event.payload.entityName  is search("tenable|nessus", ignorecase=true)
-      )
-    action:
-      run_workflow_template:
-        name: "[WORKFLOW] - Restart Tenable Linux - Campinas"
-        organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
-        job_args:
-          extra_vars:
-            alert_name: "{{ event.payload.alertTitle }}"
-            name: "{{ event.payload.entityName }}"
-            location: "{{ event.payload.entityLocation }}"
-            server: "{{ event.payload.entityIC }}"
-            episode_id: "{{ event.payload.episodeId | default('N/A') }}"
-
-  - name: Tenable Agent (Linux) indisponível - Mackenzie
-    condition: |
-      event.payload.entityOS == "LINUX" and
-      event.payload.entityLocation is search("MACKENZIE", ignorecase=true) and
-      (
-        event.payload.alertTitle  is search("tenable|nessus", ignorecase=true) or
-        event.payload.entityName  is search("tenable|nessus", ignorecase=true)
-      )
-    action:
-      run_workflow_template:
-        name: "[WORKFLOW] - Restart Tenable Linux - Mackenzie"
-        organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
-        job_args:
-          extra_vars:
-            alert_name: "{{ event.payload.alertTitle }}"
-            name: "{{ event.payload.entityName }}"
-            location: "{{ event.payload.entityLocation }}"
-            server: "{{ event.payload.entityIC }}"
-            episode_id: "{{ event.payload.episodeId | default('N/A') }}"
-
-
-  #---- CROWDSTRIKE (falcon-sensor) ------------------------------------------
-
-  - name: CrowdStrike (Linux) indisponível - Lapa
-    condition: |
-      event.payload.entityOS == "LINUX" and
-      event.payload.entityLocation is search("LAPA", ignorecase=true) and
-      (
-        event.payload.alertTitle  is search("crowdstrike|falcon", ignorecase=true) or
-        event.payload.entityName  is search("crowdstrike|falcon", ignorecase=true)
-      )
-    action:
-      run_workflow_template:
-        name: "[WORKFLOW] - Restart CrowdStrike Linux - Lapa"
-        organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
-        job_args:
-          extra_vars:
-            alert_name: "{{ event.payload.alertTitle }}"
-            name: "{{ event.payload.entityName }}"
-            location: "{{ event.payload.entityLocation }}"
-            server: "{{ event.payload.entityIC }}"
-            episode_id: "{{ event.payload.episodeId | default('N/A') }}"
-
-  - name: CrowdStrike (Linux) indisponível - Campinas
-    condition: |
-      event.payload.entityOS == "LINUX" and
-      (
-        event.payload.entityLocation is search("CAMPINAS", ignorecase=true) or
-        event.payload.entityLocation is search("OCI-NM-NM", ignorecase=true)
-      ) and
-      (
-        event.payload.alertTitle  is search("crowdstrike|falcon", ignorecase=true) or
-        event.payload.entityName  is search("crowdstrike|falcon", ignorecase=true)
-      )
-    action:
-      run_workflow_template:
-        name: "[WORKFLOW] - Restart CrowdStrike Linux - Campinas"
-        organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
-        job_args:
-          extra_vars:
-            alert_name: "{{ event.payload.alertTitle }}"
-            name: "{{ event.payload.entityName }}"
-            location: "{{ event.payload.entityLocation }}"
-            server: "{{ event.payload.entityIC }}"
-            episode_id: "{{ event.payload.episodeId | default('N/A') }}"
-
-  - name: CrowdStrike (Linux) indisponível - Mackenzie
-    condition: |
-      event.payload.entityOS == "LINUX" and
-      event.payload.entityLocation is search("MACKENZIE", ignorecase=true) and
-      (
-        event.payload.alertTitle  is search("crowdstrike|falcon", ignorecase=true) or
-        event.payload.entityName  is search("crowdstrike|falcon", ignorecase=true)
-      )
-    action:
-      run_workflow_template:
-        name: "[WORKFLOW] - Restart CrowdStrike Linux - Mackenzie"
-        organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
-        job_args:
-          extra_vars:
-            alert_name: "{{ event.payload.alertTitle }}"
-            name: "{{ event.payload.entityName }}"
-            location: "{{ event.payload.entityLocation }}"
-            server: "{{ event.payload.entityIC }}"
-            episode_id: "{{ event.payload.episodeId | default('N/A') }}"
-
-
-  #---- GUARDICORE (gc-agent) ------------------------------------------------
-
-  - name: Guardicore (Linux) indisponível - Lapa
-    condition: |
-      event.payload.entityOS == "LINUX" and
-      event.payload.entityLocation is search("LAPA", ignorecase=true) and
-      (
-        event.payload.alertTitle  is search("guardicore|gc[-_]agent", ignorecase=true) or
-        event.payload.entityName  is search("guardicore|gc[-_]agent", ignorecase=true)
-      )
-    action:
-      run_workflow_template:
-        name: "[WORKFLOW] - Restart Guardicore Linux - Lapa"
-        organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
-        job_args:
-          extra_vars:
-            alert_name: "{{ event.payload.alertTitle }}"
-            name: "{{ event.payload.entityName }}"
-            location: "{{ event.payload.entityLocation }}"
-            server: "{{ event.payload.entityIC }}"
-            episode_id: "{{ event.payload.episodeId | default('N/A') }}"
-
-  - name: Guardicore (Linux) indisponível - Campinas
-    condition: |
-      event.payload.entityOS == "LINUX" and
-      (
-        event.payload.entityLocation is search("CAMPINAS", ignorecase=true) or
-        event.payload.entityLocation is search("OCI-NM-NM", ignorecase=true)
-      ) and
-      (
-        event.payload.alertTitle  is search("guardicore|gc[-_]agent", ignorecase=true) or
-        event.payload.entityName  is search("guardicore|gc[-_]agent", ignorecase=true)
-      )
-    action:
-      run_workflow_template:
-        name: "[WORKFLOW] - Restart Guardicore Linux - Campinas"
-        organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
-        job_args:
-          extra_vars:
-            alert_name: "{{ event.payload.alertTitle }}"
-            name: "{{ event.payload.entityName }}"
-            location: "{{ event.payload.entityLocation }}"
-            server: "{{ event.payload.entityIC }}"
-            episode_id: "{{ event.payload.episodeId | default('N/A') }}"
-
-  - name: Guardicore (Linux) indisponível - Mackenzie
-    condition: |
-      event.payload.entityOS == "LINUX" and
-      event.payload.entityLocation is search("MACKENZIE", ignorecase=true) and
-      (
-        event.payload.alertTitle  is search("guardicore|gc[-_]agent", ignorecase=true) or
-        event.payload.entityName  is search("guardicore|gc[-_]agent", ignorecase=true)
-      )
-    action:
-      run_workflow_template:
-        name: "[WORKFLOW] - Restart Guardicore Linux - Mackenzie"
-        organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
-        job_args:
-          extra_vars:
-            alert_name: "{{ event.payload.alertTitle }}"
-            name: "{{ event.payload.entityName }}"
-            location: "{{ event.payload.entityLocation }}"
-            server: "{{ event.payload.entityIC }}"
-            episode_id: "{{ event.payload.episodeId | default('N/A') }}"
-
-# =========================================================================
-  # NOVA RULE - Modelo Self-Healing com Instance Group dinamico (unico JT)
-  #
-  # Esta rule apenas DISPARA o Workflow. Ela NAO decide qual datacenter
-  # utilizar (toda a inteligencia fica no Job Template "Seleciona Instance
-  # Group"). Apenas repassa os extra_vars abaixo.
-  #
-  # Fluxo: Splunk -> Rulebook -> Workflow
-  #        (Seleciona Instance Group -> Notifica Disco -> Devolve Splunk)
-  #
-  # O fallback fica no Workflow, nao no Rulebook.
-  # =========================================================================
-  # - name: Disco /home cheio (Linux) - Notifica Disco (Instance Group dinamico)
-  #   condition: |
-  #     event.payload.entityOS == "LINUX" and
-  #     event.payload.diskPath is search("^/home", ignorecase=true)
-  #   action:
-  #     run_workflow_template:
-  #       name: "[WORKFLOW] - Notifica Disco /home"
-  #       organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
-  #       job_args:
-  #         extra_vars:
-  #           server: "{{ event.payload.entityIC }}"
-  #           location: "{{ event.payload.entityLocation }}"
-  #           filesystem: "{{ event.payload.diskPath }}"
-  #           alert_name: "{{ event.payload.alertTitle }}"
-  #           entityName: "{{ event.payload.entityName }}"
-  #           episode_id: "{{ event.payload.episodeId | default('N/A') }}"
-  #---- FALLBACKS -------------
-
-  - name: Fallback - Agentes SI (Linux) fora dos sites mapeados
-    condition: |
-      event.payload.entityOS == "LINUX" and
-      (
-        event.payload.alertTitle  is search("tenable|nessus|crowdstrike|falcon|guardicore|gc[-_]agent", ignorecase=true) or
-        event.payload.entityName  is search("tenable|nessus|crowdstrike|falcon|guardicore|gc[-_]agent", ignorecase=true)
-      ) and
-      not (
-        event.payload.entityLocation is search("LAPA", ignorecase=true) or
-        event.payload.entityLocation is search("CAMPINAS", ignorecase=true) or
-        event.payload.entityLocation is search("OCI-NM-NM", ignorecase=true) or
+    - name: Disco /var acima de 85% em Mackenzie
+      condition: |
+        event.payload.entityOS == "LINUX" and
+        event.payload.diskPath is search("^/var$", ignorecase=true) and
         event.payload.entityLocation is search("MACKENZIE", ignorecase=true)
-      )
-    action:
-      run_job_template:
-        name: "fallback-splunk"
-        organization: "ORG-CLBR-TI-OPS-IT-SERVICE-AUTOMATION"
-        job_args:
-          extra_vars:
-            alert_name: "{{ event.payload.alertTitle }}"
-            system: "{{ event.payload.entityOS }}"
-            name: "{{ event.payload.entityName }}"
-            location: "{{ event.payload.entityLocation }}"
-            server: "{{ event.payload.entityIC }}"
-            episode_id: "{{ event.payload.episodeId | default('N/A') }}"
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.payload.episodeId
+      action:
+        run_workflow_template:
+          name: "[WORKFLOW] - Limpeza /var - Mackenzie"
+          organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
+          job_args:
+            extra_vars:
+              alert_name: "{ event.payload.alertTitle }"
+              name: "{ event.payload.entityName }"
+              location: "{ event.payload.entityLocation }"
+              server: "{ event.payload.entityIC }"
+              episode_id: '{ event.payload.episodeId }'
+
+    - name: Disco /opt/agent nos servidores Brux2334 e Brux2335 em Campinas
+      condition: |
+        event.payload.entityOS == "LINUX" and
+        event.payload.diskPath is search("^/opt/agent$", ignorecase=true) and
+        event.payload.entityLocation is search("CAMPINAS", ignorecase=true) and
+        (
+          event.payload.entityName is search("BRUX233[45]", ignorecase=true) or
+          event.payload.entityIC   is search("BRUX233[45]", ignorecase=true) or
+          event.payload.entityIC   is search("172\\.30\\.56\\.10[23]", ignorecase=true)
+        )
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.payload.episodeId
+      action:
+        run_workflow_template:
+          name: "[WORKFLOW] - Limpeza /opt/agent - Campinas"
+          organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
+          job_args:
+            extra_vars:
+              alert_name: "{ event.payload.alertTitle }"
+              name: "{ event.payload.entityName }"
+              location: "{ event.payload.entityLocation }"
+              server: "{ event.payload.entityIC }"
+              episode_id: '{ event.payload.episodeId }'
+
+    # ---- AGENTES SI: Tenable / CrowdStrike / Guardicore ----------------
+    # (mesma estrutura das suas; throttle adicionado em cada)
+
+    - name: Tenable Agent (Linux) indisponível - Lapa
+      condition: |
+        event.payload.entityOS == "LINUX" and
+        event.payload.entityLocation is search("LAPA", ignorecase=true) and
+        (
+          event.payload.alertTitle  is search("tenable|nessus", ignorecase=true) or
+          event.payload.entityName  is search("tenable|nessus", ignorecase=true)
+        )
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.payload.episodeId
+      action:
+        run_workflow_template:
+          name: "[WORKFLOW] - Restart Tenable Linux - Lapa"
+          organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
+          job_args:
+            extra_vars:
+              alert_name: "{ event.payload.alertTitle }"
+              name: "{ event.payload.entityName }"
+              location: "{ event.payload.entityLocation }"
+              server: "{ event.payload.entityIC }"
+              episode_id: "{ event.payload.episodeId | default('N/A') }"
+
+    - name: Tenable Agent (Linux) indisponível - Campinas
+      condition: |
+        event.payload.entityOS == "LINUX" and
+        (
+          event.payload.entityLocation is search("CAMPINAS", ignorecase=true) or
+          event.payload.entityLocation is search("OCI-NM-NM", ignorecase=true)
+        ) and
+        (
+          event.payload.alertTitle  is search("tenable|nessus", ignorecase=true) or
+          event.payload.entityName  is search("tenable|nessus", ignorecase=true)
+        )
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.payload.episodeId
+      action:
+        run_workflow_template:
+          name: "[WORKFLOW] - Restart Tenable Linux - Campinas"
+          organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
+          job_args:
+            extra_vars:
+              alert_name: "{ event.payload.alertTitle }"
+              name: "{ event.payload.entityName }"
+              location: "{ event.payload.entityLocation }"
+              server: "{ event.payload.entityIC }"
+              episode_id: "{ event.payload.episodeId | default('N/A') }"
+
+    - name: Tenable Agent (Linux) indisponível - Mackenzie
+      condition: |
+        event.payload.entityOS == "LINUX" and
+        event.payload.entityLocation is search("MACKENZIE", ignorecase=true) and
+        (
+          event.payload.alertTitle  is search("tenable|nessus", ignorecase=true) or
+          event.payload.entityName  is search("tenable|nessus", ignorecase=true)
+        )
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.payload.episodeId
+      action:
+        run_workflow_template:
+          name: "[WORKFLOW] - Restart Tenable Linux - Mackenzie"
+          organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
+          job_args:
+            extra_vars:
+              alert_name: "{ event.payload.alertTitle }"
+              name: "{ event.payload.entityName }"
+              location: "{ event.payload.entityLocation }"
+              server: "{ event.payload.entityIC }"
+              episode_id: "{ event.payload.episodeId | default('N/A') }"
+
+    - name: CrowdStrike (Linux) indisponível - Lapa
+      condition: |
+        event.payload.entityOS == "LINUX" and
+        event.payload.entityLocation is search("LAPA", ignorecase=true) and
+        (
+          event.payload.alertTitle  is search("crowdstrike|falcon", ignorecase=true) or
+          event.payload.entityName  is search("crowdstrike|falcon", ignorecase=true)
+        )
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.payload.episodeId
+      action:
+        run_workflow_template:
+          name: "[WORKFLOW] - Restart CrowdStrike Linux - Lapa"
+          organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
+          job_args:
+            extra_vars:
+              alert_name: "{ event.payload.alertTitle }"
+              name: "{ event.payload.entityName }"
+              location: "{ event.payload.entityLocation }"
+              server: "{ event.payload.entityIC }"
+              episode_id: "{ event.payload.episodeId | default('N/A') }"
+
+    - name: CrowdStrike (Linux) indisponível - Campinas
+      condition: |
+        event.payload.entityOS == "LINUX" and
+        (
+          event.payload.entityLocation is search("CAMPINAS", ignorecase=true) or
+          event.payload.entityLocation is search("OCI-NM-NM", ignorecase=true)
+        ) and
+        (
+          event.payload.alertTitle  is search("crowdstrike|falcon", ignorecase=true) or
+          event.payload.entityName  is search("crowdstrike|falcon", ignorecase=true)
+        )
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.payload.episodeId
+      action:
+        run_workflow_template:
+          name: "[WORKFLOW] - Restart CrowdStrike Linux - Campinas"
+          organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
+          job_args:
+            extra_vars:
+              alert_name: "{ event.payload.alertTitle }"
+              name: "{ event.payload.entityName }"
+              location: "{ event.payload.entityLocation }"
+              server: "{ event.payload.entityIC }"
+              episode_id: "{ event.payload.episodeId | default('N/A') }"
+
+    - name: CrowdStrike (Linux) indisponível - Mackenzie
+      condition: |
+        event.payload.entityOS == "LINUX" and
+        event.payload.entityLocation is search("MACKENZIE", ignorecase=true) and
+        (
+          event.payload.alertTitle  is search("crowdstrike|falcon", ignorecase=true) or
+          event.payload.entityName  is search("crowdstrike|falcon", ignorecase=true)
+        )
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.payload.episodeId
+      action:
+        run_workflow_template:
+          name: "[WORKFLOW] - Restart CrowdStrike Linux - Mackenzie"
+          organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
+          job_args:
+            extra_vars:
+              alert_name: "{ event.payload.alertTitle }"
+              name: "{ event.payload.entityName }"
+              location: "{ event.payload.entityLocation }"
+              server: "{ event.payload.entityIC }"
+              episode_id: "{ event.payload.episodeId | default('N/A') }"
+
+    - name: Guardicore (Linux) indisponível - Lapa
+      condition: |
+        event.payload.entityOS == "LINUX" and
+        event.payload.entityLocation is search("LAPA", ignorecase=true) and
+        (
+          event.payload.alertTitle  is search("guardicore|gc[-_]agent", ignorecase=true) or
+          event.payload.entityName  is search("guardicore|gc[-_]agent", ignorecase=true)
+        )
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.payload.episodeId
+      action:
+        run_workflow_template:
+          name: "[WORKFLOW] - Restart Guardicore Linux - Lapa"
+          organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
+          job_args:
+            extra_vars:
+              alert_name: "{ event.payload.alertTitle }"
+              name: "{ event.payload.entityName }"
+              location: "{ event.payload.entityLocation }"
+              server: "{ event.payload.entityIC }"
+              episode_id: "{ event.payload.episodeId | default('N/A') }"
+
+    - name: Guardicore (Linux) indisponível - Campinas
+      condition: |
+        event.payload.entityOS == "LINUX" and
+        (
+          event.payload.entityLocation is search("CAMPINAS", ignorecase=true) or
+          event.payload.entityLocation is search("OCI-NM-NM", ignorecase=true)
+        ) and
+        (
+          event.payload.alertTitle  is search("guardicore|gc[-_]agent", ignorecase=true) or
+          event.payload.entityName  is search("guardicore|gc[-_]agent", ignorecase=true)
+        )
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.payload.episodeId
+      action:
+        run_workflow_template:
+          name: "[WORKFLOW] - Restart Guardicore Linux - Campinas"
+          organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
+          job_args:
+            extra_vars:
+              alert_name: "{ event.payload.alertTitle }"
+              name: "{ event.payload.entityName }"
+              location: "{ event.payload.entityLocation }"
+              server: "{ event.payload.entityIC }"
+              episode_id: "{ event.payload.episodeId | default('N/A') }"
+
+    - name: Guardicore (Linux) indisponível - Mackenzie
+      condition: |
+        event.payload.entityOS == "LINUX" and
+        event.payload.entityLocation is search("MACKENZIE", ignorecase=true) and
+        (
+          event.payload.alertTitle  is search("guardicore|gc[-_]agent", ignorecase=true) or
+          event.payload.entityName  is search("guardicore|gc[-_]agent", ignorecase=true)
+        )
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.payload.episodeId
+      action:
+        run_workflow_template:
+          name: "[WORKFLOW] - Restart Guardicore Linux - Mackenzie"
+          organization: "ORG-CLBR-TI-INFRA-SUPORTE-UNIX"
+          job_args:
+            extra_vars:
+              alert_name: "{ event.payload.alertTitle }"
+              name: "{ event.payload.entityName }"
+              location: "{ event.payload.entityLocation }"
+              server: "{ event.payload.entityIC }"
+              episode_id: "{ event.payload.episodeId | default('N/A') }"
+
+    # ---- FALLBACKS (sites/hosts nao mapeados) --------------------------
+    # IMPORTANTE: em polling, o mesmo evento pode casar numa rule especifica
+    # E no fallback em ciclos diferentes. O throttle por episodeId ajuda,
+    # mas confirme se o fallback deve rodar mesmo quando a rule especifica
+    # ja rodou (hoje as condicoes 'not (...)' ja separam bem os casos).
+
+    - name: Fallback - Agentes SI (Linux) fora dos sites mapeados
+      condition: |
+        event.payload.entityOS == "LINUX" and
+        (
+          event.payload.alertTitle  is search("tenable|nessus|crowdstrike|falcon|guardicore|gc[-_]agent", ignorecase=true) or
+          event.payload.entityName  is search("tenable|nessus|crowdstrike|falcon|guardicore|gc[-_]agent", ignorecase=true)
+        ) and
+        not (
+          event.payload.entityLocation is search("LAPA", ignorecase=true) or
+          event.payload.entityLocation is search("CAMPINAS", ignorecase=true) or
+          event.payload.entityLocation is search("OCI-NM-NM", ignorecase=true) or
+          event.payload.entityLocation is search("MACKENZIE", ignorecase=true)
+        )
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.payload.episodeId
+      action:
+        run_job_template:
+          name: "fallback-splunk"
+          organization: "ORG-CLBR-TI-OPS-IT-SERVICE-AUTOMATION"
+          job_args:
+            extra_vars:
+              alert_name: "{ event.payload.alertTitle }"
+              system: "{ event.payload.entityOS }"
+              name: "{ event.payload.entityName }"
+              location: "{ event.payload.entityLocation }"
+              server: "{ event.payload.entityIC }"
+              episode_id: "{ event.payload.episodeId | default('N/A') }"
+
+    - name: Fallback - Linux /var fora dos sites mapeados
+      condition: |
+        event.payload.entityOS == "LINUX" and
+        event.payload.diskPath is search("^/var$", ignorecase=true) and
+        not (
+          event.payload.entityLocation is search("LAPA", ignorecase=true) or
+          event.payload.entityLocation is search("CAMPINAS", ignorecase=true) or
+          event.payload.entityLocation is search("OCI-NM-NM", ignorecase=true) or
+          event.payload.entityLocation is search("MACKENZIE", ignorecase=true)
+        )
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.payload.episodeId
+      action:
+        run_job_template:
+          name: "fallback-splunk"
+          organization: "ORG-CLBR-TI-OPS-IT-SERVICE-AUTOMATION"
+          job_args:
+            extra_vars:
+              alert_name: "{ event.payload.alertTitle }"
+              system: "{ event.payload.entityOS }"
+              name: "{ event.payload.entityName }"
+              location: "{ event.payload.entityLocation }"
+              server: "{ event.payload.entityIC }"
+              episode_id: "{ event.payload.episodeId | default('N/A') }"
+
+    - name: Fallback - Linux /opt/agent em CAMPINAS (servidores não homologados)
+      condition: |
+        event.payload.entityOS == "LINUX" and
+        event.payload.diskPath is search("^/opt/agent$", ignorecase=true) and
+        event.payload.entityLocation is search("CAMPINAS", ignorecase=true) and
+        not (
+          event.payload.entityName is search("BRUX233[45]", ignorecase=true) or
+          event.payload.entityIC   is search("BRUX233[45]", ignorecase=true) or
+          event.payload.entityIC   is search("172\\.30\\.56\\.10[23]", ignorecase=true)
+        )
+      throttle:
+        once_within: 10 minutes
+        group_by_attributes:
+          - event.payload.episodeId
+      action:
+        run_job_template:
+          name: "fallback-splunk"
+          organization: "ORG-CLBR-TI-OPS-IT-SERVICE-AUTOMATION"
+          job_args:
+            extra_vars:
+              alert_name: "{ event.payload.alertTitle }"
+              system: "{ event.payload.entityOS }"
+              name: "{ event.payload.entityName }"
+              location: "{ event.payload.entityLocation }"
+              server: "{ event.payload.entityIC }"
+              episode_id: "{ event.payload.episodeId }"
+```
+
+---
+
+### PASSO 3 — Configurar no AAP 2.5+
+1. **Credential:** crie um Credential (tipo custom/secret) guardando o token da REST API → injete como `SPLUNK_REST_TOKEN`. Não deixe o token no rulebook.
+2. **EE (Execution Environment):** garanta `aiohttp` instalado no EE usado pela activation (o source custom depende dele).
+3. **Projeto:** commit do `splunk_search.py` em `extensions/eda/plugins/event_source/` + o rulebook.
+4. **Decision Environment / Rulebook Activation:** aponte pro rulebook, defina as variáveis `SPLUNK_HOST`, `SPLUNK_MACRO`, e amarre o Credential.
+5. **Pede pro analista:** a macro DEVE devolver os campos com os nomes que o rulebook lê (`alertTitle, entityOS, diskPath, entityLocation, entityName, entityIC, episodeId`). Confirme fuso de `earliest/latest`.
+
+### PASSO 4 — Testes antes de ligar em prod
+- Rode a macro manual no Splunk e cheque os nomes dos campos no JSON.
+- Teste o source isolado com `ansible-rulebook -r rulebook.yml -i inventory --verbose` (fora do AAP) num índice de homologação.
+- Force um alerta repetido e valide que o `throttle` segura a 2ª execução dentro da janela.
+- Simule reinício da activation e confirme comportamento (pode gerar 1 duplicata — aceitável no seu caso).
+
+### Assumções
+- Rede EDA→Splunk:8089 liberada (você disse "entenda como se chegasse").
+- `oneshot` search aguenta o volume; se não, migrar pra search job com paginação.
+- Você mantém o `fallback-splunk` como está; só confirme a interação fallback x rule específica sob polling.
+
+### Recomendação que fica na mesa (não obrigatória)
+Se o objetivo real for **não perder evento**, o caminho certo no AAP 2.5 é **Event Stream (push durável)** ou **Kafka**, não polling custom. Considere isso numa fase 2.
 
 
-  - name: Fallback - Linux /var fora dos sites mapeados
-    condition: |
-      event.payload.entityOS == "LINUX" and
-      event.payload.diskPath is search("^/var$", ignorecase=true) and
-      not (
-        event.payload.entityLocation is search("LAPA", ignorecase=true) or
-        event.payload.entityLocation is search("CAMPINAS", ignorecase=true) or
-        event.payload.entityLocation is search("OCI-NM-NM", ignorecase=true) or
-        event.payload.entityLocation is search("MACKENZIE", ignorecase=true)
-      )
-    action:
-      run_job_template:
-        name: "fallback-splunk"
-        organization: "ORG-CLBR-TI-OPS-IT-SERVICE-AUTOMATION"
-        job_args:
-          extra_vars:
-            alert_name: "{{ event.payload.alertTitle }}"
-            system: "{{ event.payload.entityOS }}"
-            name: "{{ event.payload.entityName }}"
-            location: "{{ event.payload.entityLocation }}"
-            server: "{{ event.payload.entityIC }}"
-            episode_id: "{{ event.payload.episodeId | default('N/A') }}"
 
 
-  - name: Fallback - Linux /opt/agent em CAMPINAS (servidores não homologados)
-    condition: |
-      event.payload.entityOS == "LINUX" and
-      event.payload.diskPath is search("^/opt/agent$", ignorecase=true) and
-      event.payload.entityLocation is search("CAMPINAS", ignorecase=true) and
-      not (
-        event.payload.entityName is search("BRUX233[45]", ignorecase=true) or
-        event.payload.entityIC   is search("BRUX233[45]", ignorecase=true) or
-        event.payload.entityIC   is search("172\\.30\\.56\\.10[23]", ignorecase=true)
-      )
-    action:
-      run_job_template:
-        name: "fallback-splunk"
-        organization: "ORG-CLBR-TI-OPS-IT-SERVICE-AUTOMATION"
-        job_args:
-          extra_vars:
-            alert_name: "{{ event.payload.alertTitle }}"
-            system: "{{ event.payload.entityOS }}"
-            name: "{{ event.payload.entityName }}"
-            location: "{{ event.payload.entityLocation }}"
-            server: "{{ event.payload.entityIC }}"
-            episode_id: "{{ event.payload.episodeId }}"
+
+########################################################################################################################################################################################
+
+#Método 2
+## Self-Healing EDA — Método COMPLIANT Red Hat (Event Stream / AAP 2.5)
+
+**Tipo:** Automação de Infra (Event-Driven Ansible no AAP 2.5+). Não é app web/mobile.
+
+### Decisão: Event Stream (push durável) em vez de busca ativa
+- **Compliant e suportado pela Red Hat** (doc oficial "Simplified Event Routing", AAP 2.5) + add-on oficial `ansible/splunk-eda-ta`.
+- **Push, não polling.** O Splunk empurra o evento pro endpoint do Event Stream (com token/HMAC), com retry e autenticação nativos.
+- **Descarta:** o source plugin Python custom e a busca ativa via REST 8089 (aquilo era não suportado).
+
+### Mudança de premissa que você PRECISA aceitar
+- O analista **não entrega só macro + token**. Ele precisa:
+  1. Instalar/usar o **Splunk EDA Technical Add-on (TA)**.
+  2. Configurar uma **alert action** (Custom Alert Action / Ansible Adaptive Response / Ansible Episode Action-ITSI) apontando pra **SUA URL do Event Stream**, usando o **token que o AAP gera**.
+- **A macro dele continua sendo usada** — como o *search* do alerta agendado que dispara o push. Ele não precisa mudar a lógica de detecção, só o "para onde manda".
+- **Inversão de papéis:** quem gera o token agora é o **AAP**, e **você entrega URL+token pro analista** (antes era o contrário).
+
+---
+
+### Arquitetura final
+```
+Splunk (macro do analista -> alerta) 
+   --alert action (Splunk EDA TA, POST autenticado)-->
+AAP Event Stream (URL + Token, durável/retry)
+   --overlay no source da Rulebook Activation-->
+Rulebook (suas rules) --> Workflow/Job Templates (self-healing)
+```
+
+---
+
+### PASSO 1 — Rulebook (só o bloco `sources` muda)
+As **rules permanecem idênticas** às que já te entreguei (todas com `throttle` por `episodeId`). Mantém o source como `webhook` no rulebook; no AAP o Event Stream faz o *overlay* desse source na ativação.
+
+```yaml
+---
+- name: Regras para servidores Linux
+  hosts: EDA
+
+  # =====================================================================
+  # SOURCE COMPLIANT (Event Stream / push)
+  # No rulebook mantemos um webhook. Na Rulebook Activation do AAP voce
+  # ANEXA o Event Stream, que SUBSTITUI (overlay) este source pelo
+  # endpoint gerenciado/durável do AAP. NAO precisa de plugin Python.
+  # =====================================================================
+  sources:
+    - name: splunk_event_stream            # nome usado no mapeamento do Event Stream
+      ansible.eda.webhook:
+        host: 0.0.0.0
+        port: 5001
+        # token/hmac ficam a cargo do Event Stream do AAP (nao hardcode aqui)
+
+  rules:
+    # >>> MANTENHA AQUI EXATAMENTE as 16 rules que te passei,
+    #     cada uma com o bloco:
+    #        throttle:
+    #          once_within: 10 minutes
+    #          group_by_attributes:
+    #            - event.payload.episodeId
+    #     O 'throttle' continua importante: no push o Splunk pode
+    #     reenviar o mesmo alerta em ciclos, e o dedup por episodeId evita
+    #     disparar o self-healing repetido dentro da janela.
+    #
+    # (NBA, /var Lapa, /var Campinas, /var Mackenzie, /opt/agent Brux,
+    #  Tenable x3, CrowdStrike x3, Guardicore x3, e os 3 Fallbacks)
+```
+
+> O JSON que o Splunk TA envia cai em `event.payload.*`, então seus campos (`alertTitle, entityOS, diskPath, entityLocation, entityName, entityIC, episodeId`) continuam funcionando **desde que a macro/alerta do analista devolva esses nomes de campo**.
+
+---
+
+### PASSO 2 — Configurar no AAP 2.5 (lado seu)
+Tudo em **Automation Decisions**:
+1. **Credential:** Infrastructure > Credentials > Create credential → tipo **Token Event Stream** (ou **HMAC Event Stream** se preferir assinatura). Gere/defina o segredo.
+2. **Event Stream:** Event Streams > Create event stream → tipo igual ao da credential → selecione a credential. Salve e **copie a URL gerada** (algo como `https://<aap-gateway>/eda-event-streams/api/eda/v1/external_event_stream/<uuid>/post/`).
+3. **Projeto + Rulebook:** aponte o Project pro seu repo com o rulebook.
+4. **Rulebook Activation:** Rulebook Activations > Create → selecione Project + rulebook → na seção de Event Streams, **anexe o Event Stream e mapeie ao source `splunk_event_stream`** (isso faz o overlay do webhook).
+5. **Teste seguro:** deixe **"Forward events to rulebook activation" desligado** primeiro, dispare um evento e valide headers/payload sem acionar as rules. Depois ligue.
+
+### PASSO 3 — Entregar pro analista Splunk (lado dele)
+- **Instalar o Splunk EDA TA** (`ansible/splunk-eda-ta`, também no Splunkbase).
+- Você fornece: **URL do Event Stream + Token** (e, se HMAC, o segredo compartilhado).
+- Ele cria a **alert action** (Custom Alert Action / Adaptive Response / Episode Action-ITSI) no alerta que roda a **macro dele**, apontando pra sua URL com o token.
+- **Content-Type: application/json.**
+- Confirmar que o **payload JSON** traz os campos com os nomes que o rulebook lê. Se divergir, ele ajusta no SPL (`| rename ... as ...`).
+
+### PASSO 4 — Validação antes de prod
+- Dispare o alerta no Splunk em homologação e cheque no AAP se o Event Stream recebeu (contador/headers/payload).
+- Ligue o forward e valide que a rule certa casou e chamou o Workflow certo.
+- Force alerta repetido e confirme que o `throttle` (episodeId) segura a 2ª execução na janela.
+- Teste autenticação negativa (token errado) e confirme rejeição.
+
+### Notas de compliance / segurança
+- **Gateway AAP 2.5+ só aceita OAuth token** (não basic auth) — use Token ou HMAC Event Stream.
+- Token/segredo ficam no **Credential do AAP**, nunca no rulebook.
+- Ganhos vs busca ativa: **retry, autenticação, endpoint gerenciado e suporte oficial** — resolve o teu problema original de "perda de eventos" de forma suportada.
+
+### Assumções
+- AAP 2.5 com Gateway (você confirmou 2.5+).
+- Analista topa instalar/configurar o Splunk EDA TA (necessário — não tem como ser 100% compliant só com macro+token de polling).
+- As 16 rules permanecem as já validadas, apenas com `throttle` de dedup.
+
+### Aberto pra você decidir
+- **Token Event Stream** (mais simples) x **HMAC Event Stream** (assinatura do payload, mais robusto). Recomendo HMAC se o Splunk atravessa rede menos confiável.
