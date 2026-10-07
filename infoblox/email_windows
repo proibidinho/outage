@@ -1,0 +1,75 @@
+Prezado(a),
+
+Segue o relatorio de VALIDATION DNS Infoblox em servidores Windows.
+
+================================================================
+RESUMO
+================================================================
+Data/Hora: 2026-10-06 20:48:06
+Datacenter: Campinas
+RDM: 174764
+Funcao: VALIDATION
+DNS Primario: 10.54.44.12
+DNS Secundario: 10.29.177.82
+Total de hosts: 174
+
+OK: 131
+Falha Rede/5985 (Telecom): 5
+Falha WinRM (Servico/Auth): 32
+Falha Porta 53: 5
+Falha Admin Local: 1
+DHCP IGNORADO: 0
+Outros: 0
+
+================================================================
+OK (131)
+================================================================- 10.18.3.61 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.113 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.123 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.124 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.125 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.126 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.127 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.114 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.115 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.118 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.119 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.128 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.129 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.130 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.131 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.146 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.147 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.148 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.149 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.150 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.151 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.152 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.153 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.155 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.156 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.157 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.167 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.168 (Microsoft Windows Server 2016 Datacenter)- 10.54.3.54 (Microsoft Windows Server 2016 Datacenter)- 10.54.2.91 (Microsoft Windows Server 2016 Standard)- 10.54.3.140 (Microsoft Windows Server 2016 Datacenter)- 10.54.3.142 (Microsoft Windows Server 2016 Datacenter)- 10.54.3.141 (Microsoft Windows Server 2016 Datacenter)- 10.54.3.143 (Microsoft Windows Server 2016 Datacenter)- 10.54.3.139 (Microsoft Windows Server 2016 Datacenter)- 10.54.3.131 (Microsoft Windows Server 2016 Datacenter)- 10.54.3.162 (Microsoft Windows Server 2016 Datacenter)- 10.54.3.165 (Microsoft Windows Server 2019 Standard)- 10.54.3.181 (Microsoft Windows Server 2016 Standard)- 10.54.3.183 (Microsoft Windows Server 2019 Standard)- 10.54.3.217 (Microsoft Windows Server 2016 Standard)- 10.54.3.193 (Microsoft Windows Server 2019 Standard)- 10.54.3.194 (Microsoft Windows Server 2019 Standard)- 10.54.3.195 (Microsoft Windows Server 2019 Standard)- 10.54.3.191 (Microsoft Windows Server 2019 Standard)- 10.54.3.192 (Microsoft Windows Server 2019 Standard)- 10.54.3.196 (Microsoft Windows Server 2016 Standard)- 10.54.3.200 (Microsoft Windows Server 2016 Standard)- 10.54.3.203 (Microsoft Windows Server 2016 Standard)- 10.54.3.198 (Microsoft Windows Server 2016 Standard)- 10.54.3.206 (Microsoft Windows Server 2016 Standard)- 10.54.3.202 (Microsoft Windows Server 2016 Standard)- 10.54.3.201 (Microsoft Windows Server 2016 Standard)- 10.54.3.205 (Microsoft Windows Server 2016 Standard)- 10.54.3.207 (Microsoft Windows Server 2016 Standard)- 10.54.3.208 (Microsoft Windows Server 2016 Standard)- 10.54.3.220 (Microsoft Windows Server 2019 Standard)- 10.54.3.234 (Microsoft Windows Server 2016 Standard)- 10.54.3.235 (Microsoft Windows Server 2016 Standard)- 10.54.1.133 (Microsoft Windows Server 2016 Standard)- 10.54.1.134 (Microsoft Windows Server 2016 Standard)- 10.54.1.135 (Microsoft Windows Server 2016 Standard)- 10.54.1.136 (Microsoft Windows Server 2016 Standard)- 10.54.1.137 (Microsoft Windows Server 2016 Standard)- 10.18.3.181 (Microsoft Windows Server 2019 Standard)- 10.18.3.187 (Microsoft Windows Server 2019 Standard)- 10.18.3.188 (Microsoft Windows Server 2019 Standard)- 10.54.126.74 (Microsoft Windows Server 2019 Standard)- 10.54.2.18 (Microsoft Windows Server 2016 Standard)- 10.54.2.98 (Microsoft Windows Server 2019 Standard)- 10.54.0.236 (Microsoft Windows Server 2016 Standard)- 10.54.0.231 (Microsoft Windows Server 2016 Standard)- 10.54.0.10 (Microsoft Windows Server 2016 Standard)- 10.54.0.11 (Microsoft Windows Server 2016 Standard)- 10.54.3.190 (Microsoft Windows Server 2016 Standard)- 10.54.0.43 (Microsoft Windows Server 2016 Standard)- 10.54.0.37 (Microsoft Windows Server 2016 Datacenter)- 10.54.0.234 (Microsoft Windows Server 2019 Standard)- 10.54.4.2 (Microsoft Windows Server 2016 Standard)- 10.54.4.5 (Microsoft Windows Server 2016 Standard)- 10.54.4.14 (Microsoft Windows Server 2016 Standard)- 10.54.2.104 (Microsoft Windows Server 2019 Standard)- 10.54.2.105 (Microsoft Windows Server 2019 Standard)- 10.18.3.190 (Microsoft Windows Server 2019 Standard)- 10.18.3.182 (Microsoft Windows Server 2019 Standard)- 10.18.3.183 (Microsoft Windows Server 2019 Standard)- 10.18.3.184 (Microsoft Windows Server 2019 Standard)- 10.54.84.99 (Microsoft Windows Server 2022 Standard)- 10.54.3.185 (Microsoft Windows Server 2016 Standard)- 10.18.109.9 (Microsoft Windows Server 2022 Standard)- 10.54.7.150 (Microsoft Windows Server 2022 Standard)- 10.54.7.151 (Microsoft Windows Server 2022 Standard)- 10.54.7.152 (Microsoft Windows Server 2022 Standard)- 10.54.7.154 (Microsoft Windows Server 2016 Standard)- 10.18.109.31 (Microsoft Windows Server 2022 Standard)- 10.54.3.14 (Microsoft Windows Server 2025 Standard)- 10.54.2.92 (Microsoft Windows Server 2019 Standard)- 10.54.2.94 (Microsoft Windows Server 2019 Standard)- 10.54.0.215 (Microsoft Windows Server 2019 Standard)- 10.54.0.214 (Microsoft Windows Server 2019 Standard)- 10.54.2.16 (Microsoft Windows Server 2019 Standard)- 10.54.2.17 (Microsoft Windows Server 2019 Standard)- 10.54.2.121 (Microsoft Windows Server 2019 Standard)- 10.54.7.29 (Microsoft Windows Server 2022 Standard)- 10.54.7.30 (Microsoft Windows Server 2022 Standard)- 10.54.7.31 (Microsoft Windows Server 2022 Standard)- 10.54.7.32 (Microsoft Windows Server 2022 Standard)- 10.54.1.194 (Microsoft Windows Server 2016 Standard)- 10.54.1.193 (Microsoft Windows Server 2016 Standard)- 10.54.1.195 (Microsoft Windows Server 2019 Standard)- 10.18.50.216 (Microsoft Windows Server 2022 Standard)- 10.54.7.33 (Microsoft Windows Server 2022 Standard)- 10.18.55.233 (Microsoft Windows Server 2022 Standard)- 10.54.126.130 (Microsoft Windows Server 2019 Standard)- 10.18.50.226 (Microsoft Windows Server 2019 Standard)- 10.18.3.116 (Microsoft Windows Server 2016 Datacenter)- 10.18.3.117 (Microsoft Windows Server 2016 Datacenter)- 10.54.1.223 (Microsoft Windows Server 2022 Standard)- 10.54.1.224 (Microsoft Windows Server 2022 Standard)- 10.54.1.225 (Microsoft Windows Server 2022 Standard)- 10.54.1.226 (Microsoft Windows Server 2022 Standard)- 10.54.1.227 (Microsoft Windows Server 2022 Standard)- 10.54.1.228 (Microsoft Windows Server 2022 Standard)- 10.54.1.229 (Microsoft Windows Server 2022 Standard)- 10.54.2.14 (Microsoft Windows Server 2019 Standard)- 10.54.2.15 (Microsoft Windows Server 2016 Datacenter)- 10.54.0.50 (Microsoft Windows Server 2019 Standard)- 10.54.3.163 (Microsoft Windows Server 2022 Standard)- 10.18.55.231 (Microsoft Windows Server 2022 Standard)- 10.18.100.96 (Microsoft Windows Server 2016 Standard)- 10.54.1.60 (Microsoft Windows Server 2016 Standard)
+
+================================================================
+FALHA REDE/5985 - TELECOM (5)
+================================================================- 10.54.3.210- 10.18.107.37- 10.87.0.86- 10.87.0.87- 10.53.22.84
+
+ACAO: Porta 5985 inacessivel pela rede. Abrir chamado para equipe
+de Telecom solicitar liberacao de firewall na porta TCP 5985 (WinRM).
+
+================================================================
+FALHA WINRM - SERVICO/AUTH (32)
+================================================================- 10.18.106.63 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.18.106.64 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.18.53.145 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.18.82.153 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.54.3.209 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.54.3.224 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.54.0.55 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.54.0.60 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.54.0.227 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 172.30.24.146 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 172.30.24.147 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.54.0.133 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.18.55.218 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.54.7.54 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.54.7.55 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.54.7.52 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.54.7.53 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.29.4.135 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.18.3.35 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.18.49.69 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.53.22.85 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.53.22.83 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.18.53.109 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.18.55.217 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.18.32.42 | WinRM falhou - Task failed: winrm send_input failed;
+stdout:
+stderr 'PowerShell' is not recognized as an...- 10.18.50.118 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.54.0.162 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.18.32.88 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.54.0.161 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.54.3.188 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.54.1.19 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server- 10.2.20.16 | WinRM falhou - Task failed: ntlm: the specified credentials were rejected by the server
+
+ACAO: Porta 5985 acessivel, porem o servico WinRM nao respondeu.
+Verificar com equipe Windows:
+- Servico WinRM esta rodando? (Get-Service WinRM)
+- Listener configurado? (winrm enumerate winrm/config/listener)
+- Credencial CyberArk valida para este servidor?
+
+================================================================
+FALHA PORTA 53 (5)
+================================================================- 10.65.76.21 | AMBOS_BLOQUEADOS- 10.54.3.204 | PRIMARIO_BLOQUEADO- 10.54.126.73 | PRIMARIO_BLOQUEADO- 10.54.0.130 | PRIMARIO_BLOQUEADO- 10.54.0.44 | PRIMARIO_BLOQUEADO
+
+ACAO: Solicitar liberacao TCP/UDP para DNS Infoblox na porta 53
+- DNS Primario: 10.54.44.12
+- DNS Secundario: 10.29.177.82
+
+================================================================
+FALHA ADMIN LOCAL (1)
+================================================================- 10.54.3.199
+
+ACAO: Verificar se a conta possui privilegios de Administrador Local
+
+================================================================
+SERVIDORES DHCP (0)
+================================================================
+Estes servidores utilizam DHCP.
+Nenhuma alteração foi realizada pois o DNS será obtido automaticamente pelo lease DHCP.
+
+================================================================
+OUTROS (0)
+================================================================
+
+================================================================
+
+Planilha detalhada em anexo.
+
+Este e um email automatico gerado pelo Ansible.
