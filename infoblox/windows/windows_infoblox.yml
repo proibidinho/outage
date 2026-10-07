@@ -1,22 +1,35 @@
 ---
 # =============================================================================
-# PLAYBOOK PRINCIPAL - WINDOWS INFOBLOX DNS
+# PLAYBOOK UNICO - INFOBLOX DNS WINDOWS
 # =============================================================================
-# Variáveis do Survey:
-#   - servers: Lista de IPs (um por linha)
-#   - datacenter: Mackenzie | Lapa | Campinas
-#   - funcao: validation | deploy | rollback
-#   - email_destino: Email para enviar relatório
-#   - rdm: Número da RDM (opcional)
+# Um unico playbook atende os quatro modos:
+#   validation    -> pre-check somente leitura
+#   deploy        -> somente hosts OK PARA ALTERAÇÃO entram nos roles
+#   pos-validacao -> evidencia da GMUD, somente leitura
+#   rollback      -> executa o role de rollback da versao detectada
+#
+# Categorias operacionais de validation/deploy:
+#   DNS JÁ CORRETO | OK PARA ALTERAÇÃO | DHCP | FAZER MANUALMENTE
+#
+# Regra importante:
+#   O servidor somente pode ser OK PARA ALTERAÇÃO se os DOIS DNS Infoblox
+#   esperados responderem na porta 53. Um unico DNS funcionando nao basta.
+#
+# Variaveis do Survey:
+#   - servers        : lista de IPs (um por linha)
+#   - datacenter     : Mackenzie | Lapa | Campinas
+#   - funcao         : validation | deploy | pos-validacao | rollback
+#   - email_destino  : email para o relatorio
+#   - rdm            : numero da RDM (opcional)
 # =============================================================================
 
 # =============================================================================
-# PLAY 1: BUSCAR CREDENCIAIS E ADICIONAR SERVIDORES
+# PLAY 1: VALIDAR PARAMETROS, BUSCAR CREDENCIAL E MONTAR INVENTORY
 # =============================================================================
-- name: Preparar inventory com credenciais CyberArk
+- name: Preparar inventory Windows
   hosts: localhost
   gather_facts: false
-  
+
   vars:
     dns_infoblox:
       Mackenzie:
@@ -31,6 +44,16 @@
     backup_dir: "C:\\DNS_Backup_Ansible"
 
   tasks:
+    - name: PARAMETROS | Validar entradas
+      ansible.builtin.assert:
+        that:
+          - funcao | default('') in ['validation', 'deploy', 'pos-validacao', 'rollback']
+          - datacenter is defined
+          - datacenter in dns_infoblox
+          - servers is defined
+          - (servers.splitlines() | map('trim') | select() | list | length) > 0
+        fail_msg: "Parametros invalidos. funcao={{ funcao | default('N/D') }} datacenter={{ datacenter | default('N/D') }}"
+
     - name: CYBERARK | Buscar credencial admin
       delegate_to: localhost
       delegate_facts: true
@@ -51,6 +74,7 @@
         http_proxy: ""
         https_proxy: ""
         no_proxy: "10.88.132.184"
+      no_log: true
 
     - name: INVENTORY | Adicionar servidores ao grupo windows
       ansible.builtin.add_host:
@@ -73,35 +97,53 @@
       delegate_to: localhost
       no_log: true
 
-    - name: INFO | Exibir informações da execução
+    - name: INFO | Exibir informacoes da execucao
       ansible.builtin.debug:
         msg: |
-          ================================================================
+          ================================================================================
           INFOBLOX DNS WINDOWS - {{ funcao | upper }}
-          ================================================================
+          ================================================================================
           Datacenter: {{ datacenter }}
           RDM: {{ rdm | default('N/A') }}
           Total de hosts: {{ servers.splitlines() | map('trim') | select() | unique | list | length }}
-          Função: {{ funcao }}
-          DNS Primário: {{ dns_infoblox[datacenter].primario }}
-          DNS Secundário: {{ dns_infoblox[datacenter].secundario }}
-          ================================================================
+          DNS Primario: {{ dns_infoblox[datacenter].primario }}
+          DNS Secundario: {{ dns_infoblox[datacenter].secundario }}
+          ================================================================================
 
 # =============================================================================
-# PLAY 2: EXECUTAR VALIDAÇÃO OU DEPLOY/ROLLBACK
+# PLAY 2: TESTES, CLASSIFICACAO, DEPLOY, POS-VALIDACAO E ROLLBACK
 # =============================================================================
-- name: Executar nos servidores Windows
+- name: Executar fluxo Windows Infoblox
   hosts: windows
   gather_facts: false
   ignore_unreachable: true
   ignore_errors: true
 
   tasks:
-    # =========================================================================
-    # ETAPA 1A: TESTAR CONECTIVIDADE DE REDE - PORTA 5985 (TCP PURO)
-    # Roda no localhost (controller). Não precisa de nada no servidor remoto.
-    # Se falhar = porta bloqueada por firewall/rede → problema de Telecom.
-    # =========================================================================
+    # -------------------------------------------------------------------------
+    # INIT
+    # -------------------------------------------------------------------------
+    - name: INIT | Valores padrao
+      ansible.builtin.set_fact:
+        porta_5985_ok: false
+        winrm_ok: false
+        winrm_erro: ""
+        dhcp_detectado: false
+        dns_configurado_ok: false
+        dns1_ok: false
+        dns2_ok: false
+        admin_ok: false
+        so_detectado: "Desconhecido"
+        detected_version: ""
+        domain_name: ""
+        datacenter_final: "{{ datacenter }}"
+        dns_atual_texto: "N/A"
+        deploy_executado: false
+        rollback_executado: false
+
+    # -------------------------------------------------------------------------
+    # REDE / WINRM - todos os modos
+    # -------------------------------------------------------------------------
     - name: REDE | Testar porta 5985 via TCP
       ansible.builtin.wait_for:
         host: "{{ inventory_hostname }}"
@@ -111,92 +153,69 @@
       delegate_to: localhost
       register: porta_5985_test
       ignore_errors: true
+      changed_when: false
 
     - name: REDE | Registrar status porta 5985
       ansible.builtin.set_fact:
         porta_5985_ok: "{{ not (porta_5985_test.failed | default(true)) }}"
 
-    # =========================================================================
-    # ETAPA 1B: TESTAR WINRM / AUTENTICAÇÃO (SOMENTE SE PORTA 5985 OK)
-    # Testa se o serviço WinRM responde e se a credencial autentica.
-    # Se falhar = serviço WinRM parado, credencial inválida ou PowerShell
-    # incompatível → problema do Time Windows.
-    # =========================================================================
-    - name: WINRM | Testar conexão e autenticação
+    - name: WINRM | Testar conexao e autenticacao
       ansible.windows.win_ping:
       register: winrm_test
-      when: porta_5985_ok | default(false)
+      when: porta_5985_ok | bool
       ignore_errors: true
-
-    # - name: WINRM | Registrar status
-    #   ansible.builtin.set_fact:
-    #     winrm_ok: >-
-    #       {{ (porta_5985_ok | default(false)) and
-    #          not (winrm_test.failed | default(false)) and
-    #          not (winrm_test.unreachable | default(false)) }}
-    #     winrm_erro: >-
-    #       {%- if not (porta_5985_ok | default(false)) -%}
-    #         Porta 5985 inacessivel - Firewall ou rede bloqueando (Telecom)
-    #       {%- elif (winrm_test.unreachable | default(false)) or (winrm_test.failed | default(false)) -%}
-    #         {{ winrm_test.msg | default('Falha WinRM - verificar servico e credenciais') | truncate(120) }}
-    #       {%- else -%}
-    #         OK
-    #       {%- endif -%}
-
 
     - name: WINRM | Registrar status
       ansible.builtin.set_fact:
         winrm_ok: >-
-          {{ (porta_5985_ok | default(false)) and
-            not (winrm_test.failed | default(false)) and
-            not (winrm_test.unreachable | default(false)) }}
+          {{ (porta_5985_ok | bool) and
+             not (winrm_test.failed | default(false)) and
+             not (winrm_test.unreachable | default(false)) }}
         winrm_erro: >-
-          {%- if not (porta_5985_ok | default(false)) -%}
-            Porta 5985 inacessivel - Firewall ou rede bloqueando (Telecom)
+          {%- if not (porta_5985_ok | bool) -%}
+          Porta 5985 inacessivel
           {%- elif (winrm_test.unreachable | default(false)) or (winrm_test.failed | default(false)) -%}
-            {{ winrm_test.msg | default('Falha WinRM - verificar servico e credenciais') | truncate(120) }}
+          {{ winrm_test.msg | default('Falha WinRM - verificar servico e credenciais') | truncate(120) }}
           {%- else -%}
-            SEM_ERRO
+          SEM_ERRO
           {%- endif -%}
 
-
-    # DOMAIN
-    - name: DOMAIN | Obter domínio da máquina
+    # -------------------------------------------------------------------------
+    # SO / DOMINIO - todos os modos que conseguiram WinRM
+    # -------------------------------------------------------------------------
+    - name: DOMAIN | Obter dominio da maquina
       ansible.windows.win_shell: |
         (Get-WmiObject -Class win32_computersystem).Domain
       register: domain_result
-      when: winrm_ok | default(false)
+      when: winrm_ok | bool
+      ignore_errors: true
+      changed_when: false
 
-    - name: DOMAIN | Normalizar domínio
+    - name: DOMAIN | Normalizar dominio
       ansible.builtin.set_fact:
         domain_name: "{{ domain_result.stdout | default('') | lower | trim }}"
+      when: winrm_ok | bool
 
     - name: DOMAIN | Definir datacenter_final
       ansible.builtin.set_fact:
         datacenter_final: >-
           {%- set d = domain_name | default('') -%}
-          {%- if d in ['corp.clarobr','claro.com.br'] -%}
-          Campinas
-          {%- elif d in ['nt.embratel.com.br','extranet.ebt','ixtools.telco.embratel','primesys.br'] -%}
-          Mackenzie
-          {%- elif d in ['netservicos.corp','dcing.corp','netdatacenter.corp'] -%}
-          Lapa
-          {%- else -%}
-          {{ datacenter }}
-          {%- endif -%}
+          {%- if d in ['corp.clarobr','claro.com.br'] -%}Campinas
+          {%- elif d in ['nt.embratel.com.br','extranet.ebt','ixtools.telco.embratel','primesys.br'] -%}Mackenzie
+          {%- elif d in ['netservicos.corp','dcing.corp','netdatacenter.corp'] -%}Lapa
+          {%- else -%}{{ datacenter }}{%- endif -%}
+      when: winrm_ok | bool
 
-    # =========================================================================
-    # ETAPA 2: DETECTAR VERSÃO DO WINDOWS (SE WINRM OK)
-    # =========================================================================
-    - name: SO | Detectar versão do Windows
+    - name: SO | Detectar versao do Windows
       ansible.windows.win_shell: |
         $os = Get-WmiObject Win32_OperatingSystem
         Write-Output $os.Caption
       register: windows_version_full
-      when: winrm_ok | default(false)
+      when: winrm_ok | bool
       ignore_errors: true
+      changed_when: false
 
-    - name: SO | Classificar versão
+    - name: SO | Classificar versao
       ansible.builtin.set_fact:
         so_detectado: "{{ windows_version_full.stdout | default('Desconhecido') | trim }}"
         detected_version: >-
@@ -207,327 +226,411 @@
           {%- elif '2019' in v -%}2019
           {%- elif '2022' in v -%}2022
           {%- elif '2025' in v or '2026' in v -%}2025
-          {%- else -%}2019{%- endif -%}
-      when: winrm_ok | default(false)
+          {%- else -%}DESCONHECIDO{%- endif -%}
+      when: winrm_ok | bool
 
-    # =========================================================================
-    # ETAPA 3: TESTAR PORTA 53 DO INFOBLOX (SE WINRM OK)
-    # =========================================================================
-    - name: DNS | Testar porta 53 - DNS Primário
+    # -------------------------------------------------------------------------
+    # DNS PORTA 53 - SEMPRE TESTAR OS DOIS DNS
+    # -------------------------------------------------------------------------
+    - name: DNS | Testar porta 53 - DNS Primario
       ansible.windows.win_shell: |
         $tcp = New-Object System.Net.Sockets.TcpClient
         try {
-          $tcp.Connect("{{ dns_infoblox[datacenter_final | default(datacenter)].primario }}", 53)
-          if ($tcp.Connected) { Write-Output "DNS1_OK"; $tcp.Close() }
-          else { Write-Output "DNS1_FALHA" }
+          $tcp.Connect("{{ dns_infoblox[datacenter_final].primario }}", 53)
+          if ($tcp.Connected) { Write-Output "DNS1_OK" } else { Write-Output "DNS1_FALHA" }
         } catch { Write-Output "DNS1_FALHA" }
+        finally { $tcp.Close() }
       register: dns1_test
-      when: winrm_ok | default(false)
+      when: winrm_ok | bool
       ignore_errors: true
+      changed_when: false
 
-    - name: DNS | Testar porta 53 - DNS Secundário
+    - name: DNS | Testar porta 53 - DNS Secundario
       ansible.windows.win_shell: |
         $tcp = New-Object System.Net.Sockets.TcpClient
         try {
-          $tcp.Connect("{{ dns_infoblox[datacenter_final | default(datacenter)].secundario }}", 53)
-          if ($tcp.Connected) { Write-Output "DNS2_OK"; $tcp.Close() }
-          else { Write-Output "DNS2_FALHA" }
+          $tcp.Connect("{{ dns_infoblox[datacenter_final].secundario }}", 53)
+          if ($tcp.Connected) { Write-Output "DNS2_OK" } else { Write-Output "DNS2_FALHA" }
         } catch { Write-Output "DNS2_FALHA" }
+        finally { $tcp.Close() }
       register: dns2_test
-      when: winrm_ok | default(false)
+      when: winrm_ok | bool
       ignore_errors: true
+      changed_when: false
 
     - name: DNS | Registrar status porta 53
       ansible.builtin.set_fact:
         dns1_ok: "{{ dns1_test.stdout is defined and 'DNS1_OK' in dns1_test.stdout }}"
         dns2_ok: "{{ dns2_test.stdout is defined and 'DNS2_OK' in dns2_test.stdout }}"
-      when: winrm_ok | default(false)
+      when: winrm_ok | bool
 
-    # =========================================================================
-    # ETAPA 4: TESTAR PERMISSÃO DE ADMIN LOCAL (SE WINRM OK)
-    # =========================================================================
-    - name: ADMIN | Testar permissão para alterar DNS
+    # -------------------------------------------------------------------------
+    # DNS ATUAL - coleta exata dos enderecos em TODAS as interfaces relevantes
+    # -------------------------------------------------------------------------
+    - name: DNS | Obter configuracao atual
       ansible.windows.win_shell: |
-        # Tenta obter a interface de rede
-        $adapter = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1
-        if (-not $adapter) {
-          Write-Output "ADMIN_FALHA_INTERFACE"
-          exit 0
-        }
-        # Tenta ler configuração DNS (precisa de permissão)
-        try {
-          $dns = Get-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 -ErrorAction Stop
-          # Verifica se o usuário é admin local
-          $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-          if ($isAdmin) {
-            Write-Output "ADMIN_OK"
-          } else {
-            Write-Output "ADMIN_FALHA_NAO_ADMIN"
-          }
-        } catch {
-          Write-Output "ADMIN_FALHA_PERMISSAO"
-        }
-      register: admin_test
-      when: winrm_ok | default(false)
-      ignore_errors: true
+        $addresses = @(Get-DnsClientServerAddress -AddressFamily IPv4 |
+          Where-Object { $_.InterfaceAlias -notlike '*Loopback*' } |
+          ForEach-Object { $_.ServerAddresses } |
+          Where-Object { $_ })
 
-    - name: ADMIN | Registrar status permissão
-      ansible.builtin.set_fact:
-        admin_ok: "{{ admin_test.stdout is defined and 'ADMIN_OK' in admin_test.stdout }}"
-        admin_erro: >-
-          {%- if admin_test.stdout is defined -%}
-            {%- if 'ADMIN_FALHA_INTERFACE' in admin_test.stdout -%}Interface de rede nao encontrada
-            {%- elif 'ADMIN_FALHA_NAO_ADMIN' in admin_test.stdout -%}Usuario nao e administrador local
-            {%- elif 'ADMIN_FALHA_PERMISSAO' in admin_test.stdout -%}Sem permissao para alterar DNS
-            {%- else -%}-{%- endif -%}
-          {%- else -%}Erro ao verificar permissao{%- endif -%}
-      when: winrm_ok | default(false)
-
-    # =========================================================================
-    # ETAPA 5: OBTER DNS ATUAL (PARA RELATÓRIO)
-    # =========================================================================
-    # - name: INFO | Obter configuração DNS atual
-    #   ansible.windows.win_shell: |
-    #     Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notlike "*Loopback*" } | Select-Object InterfaceAlias, ServerAddresses | Format-Table -AutoSize | Out-String
-    #   register: dns_atual
-    #   when: winrm_ok | default(false)
-    #   ignore_errors: true
-
-    - name: INFO | Obter configuração DNS atual
-      ansible.windows.win_shell: |
-        $dns = Get-DnsClientServerAddress -AddressFamily IPv4 | 
-              Where-Object { $_.InterfaceAlias -notlike "*Loopback*" -and $_.ServerAddresses.Count -gt 0 } |
-              Select-Object -First 1
-        if ($dns) {
-          Write-Output "$($dns.InterfaceAlias)|$($dns.ServerAddresses -join ',')"
+        if ($addresses.Count -gt 0) {
+          Write-Output "ADDRESSES|$($addresses -join ',')"
         } else {
-          Write-Output "NONE|DHCP"
+          Write-Output "ADDRESSES|DHCP"
+        }
+
+        if (($addresses -contains '{{ dns_infoblox[datacenter_final].primario }}') -and
+            ($addresses -contains '{{ dns_infoblox[datacenter_final].secundario }}')) {
+          Write-Output "DNS_CORRETO"
+        } else {
+          Write-Output "DNS_NAO_CORRETO"
         }
       register: dns_atual
-      when: winrm_ok | default(false)
+      when: winrm_ok | bool
       ignore_errors: true
+      changed_when: false
 
-    # =========================================================================
-    # MODO VALIDATION: APENAS REGISTRAR RESULTADO
-    # =========================================================================
-    - name: VALIDATION | Registrar resultado
+    - name: DNS | Registrar configuracao atual
+      ansible.builtin.set_fact:
+        dns_configurado_ok: "{{ dns_atual.stdout is defined and 'DNS_CORRETO' in dns_atual.stdout }}"
+        dns_atual_texto: "{{ dns_atual.stdout | default('N/A') | trim }}"
+      when: winrm_ok | bool
+
+    # -------------------------------------------------------------------------
+    # DHCP - mesma logica de windows/infoblox_dominio.yml
+    # -------------------------------------------------------------------------
+    - name: DHCP | Verificar se todas as interfaces ativas usam DHCP
+      ansible.windows.win_shell: |
+        $adapters = Get-NetAdapter | Where-Object {
+          $_.Status -eq 'Up' -and
+          $_.InterfaceDescription -notlike '*Virtual*' -and
+          $_.InterfaceDescription -notlike '*Loopback*'
+        } | Where-Object {
+          (Get-NetIPInterface -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4).Dhcp -eq 'Disabled'
+        }
+
+        if (($adapters | Measure-Object).Count -eq 0) {
+          Write-Output "SOMENTE_DHCP"
+        } else {
+          Write-Output "DNS_ESTATICO"
+        }
+      register: dhcp_check
+      when: winrm_ok | bool
+      ignore_errors: true
+      changed_when: false
+
+    - name: DHCP | Registrar status
+      ansible.builtin.set_fact:
+        dhcp_detectado: "{{ dhcp_check.stdout is defined and 'SOMENTE_DHCP' in dhcp_check.stdout }}"
+      when: winrm_ok | bool
+
+    # -------------------------------------------------------------------------
+    # ADMIN - somente quando o modo puder alterar
+    # -------------------------------------------------------------------------
+    - name: ADMIN | Testar administrador local
+      ansible.windows.win_shell: |
+        $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        if ($isAdmin) { Write-Output "ADMIN_OK" } else { Write-Output "ADMIN_FALHA" }
+      register: admin_test
+      when:
+        - winrm_ok | bool
+        - funcao in ['validation', 'deploy']
+      ignore_errors: true
+      changed_when: false
+
+    - name: ADMIN | Registrar status
+      ansible.builtin.set_fact:
+        admin_ok: "{{ admin_test.stdout is defined and 'ADMIN_OK' in admin_test.stdout }}"
+      when:
+        - winrm_ok | bool
+        - funcao in ['validation', 'deploy']
+
+    # -------------------------------------------------------------------------
+    # VALIDATION
+    # -------------------------------------------------------------------------
+    - name: VALIDATION | Classificar servidor
       ansible.builtin.set_fact:
         resultado_host:
           ip: "{{ inventory_hostname }}"
-          so: "{{ so_detectado | default('Desconhecido') }}"
-          datacenter: "{{ datacenter }}"
+          so: "{{ so_detectado }}"
+          datacenter: "{{ datacenter_final }}"
           funcao: "{{ funcao }}"
-          winrm: >-
-            {%- if not (porta_5985_ok | default(false)) -%}FALHA_REDE
-            {%- elif not (winrm_ok | default(false)) -%}FALHA_SERVICO
-            {%- else -%}OK{%- endif -%}
-          porta_53: >-
-            {%- if not (winrm_ok | default(false)) -%}NAO_TESTADO
-            {%- elif (dns1_ok | default(false)) and (dns2_ok | default(false)) -%}OK
-            {%- elif not (dns1_ok | default(false)) and not (dns2_ok | default(false)) -%}AMBOS_BLOQUEADOS
-            {%- elif not (dns1_ok | default(false)) -%}PRIMARIO_BLOQUEADO
-            {%- else -%}SECUNDARIO_BLOQUEADO{%- endif -%}
-          admin_local: >-
-            {%- if not (winrm_ok | default(false)) -%}NAO_TESTADO
-            {%- elif (admin_ok | default(false)) -%}OK
-            {%- else -%}FALHA{%- endif -%}
-          status: >-
-            {%- if not (porta_5985_ok | default(false)) -%}FALHA
-            {%- elif not (winrm_ok | default(false)) -%}FALHA
-            {%- elif not (dns1_ok | default(false)) or not (dns2_ok | default(false)) -%}FALHA
-            {%- elif not (admin_ok | default(false)) -%}FALHA
-            {%- else -%}OK{%- endif -%}
+          classificacao: >-
+            {%- if not (porta_5985_ok | bool) or not (winrm_ok | bool) -%}FAZER MANUALMENTE
+            {%- elif dhcp_detectado | bool -%}DHCP
+            {%- elif dns_configurado_ok | bool -%}DNS JÁ CORRETO
+            {%- elif (dns1_ok | bool) and (dns2_ok | bool) and (admin_ok | bool) -%}OK PARA ALTERAÇÃO
+            {%- else -%}FAZER MANUALMENTE{%- endif -%}
+          status: "VALIDADO"
           tipo_erro: >-
-            {%- if not (porta_5985_ok | default(false)) -%}REDE_5985
-            {%- elif not (winrm_ok | default(false)) -%}WINRM
-            {%- elif not (dns1_ok | default(false)) or not (dns2_ok | default(false)) -%}FIREWALL_53
-            {%- elif not (admin_ok | default(false)) -%}ADMIN_LOCAL
+            {%- if not (porta_5985_ok | bool) -%}REDE_5985
+            {%- elif not (winrm_ok | bool) -%}WINRM
+            {%- elif dhcp_detectado | bool -%}DHCP
+            {%- elif dns_configurado_ok | bool -%}NENHUM
+            {%- elif not (dns1_ok | bool) or not (dns2_ok | bool) -%}FIREWALL_53
+            {%- elif not (admin_ok | bool) -%}ADMIN_LOCAL
             {%- else -%}NENHUM{%- endif -%}
           mensagem: >-
-            {%- if not (porta_5985_ok | default(false)) -%}
-              Porta 5985 inacessivel - Firewall/rede bloqueando (abrir chamado Telecom)
-            {%- elif not (winrm_ok | default(false)) -%}
-              WinRM falhou - {{ winrm_erro | default('verificar servico WinRM e credenciais') | truncate(100) }}
-            {%- elif not (dns1_ok | default(false)) and not (dns2_ok | default(false)) -%}
-              Porta 53 bloqueada para ambos DNS ({{ dns_infoblox[datacenter_final | default(datacenter)].primario }} e {{ dns_infoblox[datacenter_final | default(datacenter)].secundario }})
-            {%- elif not (dns1_ok | default(false)) -%}
-              Porta 53 bloqueada para DNS primario {{ dns_infoblox[datacenter_final | default(datacenter)].primario }}
-            {%- elif not (dns2_ok | default(false)) -%}
-              Porta 53 bloqueada para DNS secundario {{ dns_infoblox[datacenter_final | default(datacenter)].secundario }}
-            {%- elif not (admin_ok | default(false)) -%}
-              {{ admin_erro | default('Sem permissao de admin local') }}
-            {%- else -%}
-              Validacao OK - Rede, WinRM, Porta 53 e Admin Local
+            {%- if not (porta_5985_ok | bool) -%}Porta 5985 inacessivel
+            {%- elif not (winrm_ok | bool) -%}WinRM indisponivel - {{ winrm_erro | truncate(120) }}
+            {%- elif dhcp_detectado | bool -%}Servidor utiliza DHCP. Nenhuma alteracao sera realizada.
+            {%- elif dns_configurado_ok | bool -%}Os dois DNS Infoblox esperados ja estao configurados.
+            {%- elif not (dns1_ok | bool) and not (dns2_ok | bool) -%}Os dois DNS Infoblox falharam no teste da porta 53.
+            {%- elif not (dns1_ok | bool) -%}DNS primario falhou no teste da porta 53.
+            {%- elif not (dns2_ok | bool) -%}DNS secundario falhou no teste da porta 53.
+            {%- elif not (admin_ok | bool) -%}Usuario nao e administrador local.
+            {%- else -%}Pre-requisitos atendidos.
             {%- endif -%}
-          #dns_atual: "{{ dns_atual.stdout | default('N/A') | regex_replace('\\r\\n', ' | ') | truncate(200) }}"
-          dns_atual: "{{ dns_atual.stdout | default('NONE|DHCP') | trim }}"
+          dns_atual: "{{ dns_atual_texto }}"
+          dns_esperado: "{{ dns_infoblox[datacenter_final].primario }}, {{ dns_infoblox[datacenter_final].secundario }}"
       when: funcao == 'validation'
 
-    # =========================================================================
-    # MODO DEPLOY: EXECUTAR ROLE PARA ALTERAR DNS
-    # =========================================================================
-    - name: DEPLOY | Verificar pré-requisitos
+    # -------------------------------------------------------------------------
+    # DEPLOY - gate: SOMENTE OK PARA ALTERACAO
+    # -------------------------------------------------------------------------
+    - name: DEPLOY | Calcular candidato
       ansible.builtin.set_fact:
-        pode_deploy: "{{ (winrm_ok | default(false)) and (dns1_ok | default(false)) and (dns2_ok | default(false)) and (admin_ok | default(false)) }}"
+        pode_deploy: >-
+          {{ (porta_5985_ok | bool)
+             and (winrm_ok | bool)
+             and not (dhcp_detectado | bool)
+             and not (dns_configurado_ok | bool)
+             and (dns1_ok | bool)
+             and (dns2_ok | bool)
+             and (admin_ok | bool)
+             and (detected_version in ['2012R2', '2016', '2019', '2022', '2025']) }}
+      when: funcao == 'deploy'
+
+    - name: DEPLOY | Registrar pre-classificacao
+      ansible.builtin.set_fact:
+        resultado_host:
+          ip: "{{ inventory_hostname }}"
+          so: "{{ so_detectado }}"
+          datacenter: "{{ datacenter_final }}"
+          funcao: "{{ funcao }}"
+          classificacao: >-
+            {%- if dhcp_detectado | bool -%}DHCP
+            {%- elif dns_configurado_ok | bool -%}DNS JÁ CORRETO
+            {%- elif pode_deploy | bool -%}OK PARA ALTERAÇÃO
+            {%- else -%}FAZER MANUALMENTE{%- endif -%}
+          status: "IGNORADO (NAO ENVIADO AO DEPLOY)"
+          tipo_erro: >-
+            {%- if dhcp_detectado | bool -%}DHCP
+            {%- elif dns_configurado_ok | bool -%}NENHUM
+            {%- elif not (porta_5985_ok | bool) -%}REDE_5985
+            {%- elif not (winrm_ok | bool) -%}WINRM
+            {%- elif not (dns1_ok | bool) or not (dns2_ok | bool) -%}FIREWALL_53
+            {%- elif not (admin_ok | bool) -%}ADMIN_LOCAL
+            {%- else -%}VERSAO_NAO_SUPORTADA{%- endif -%}
+          mensagem: "Nao enviado ao deploy ate atender todos os pre-requisitos."
+          dns_atual: "{{ dns_atual_texto }}"
+          dns_esperado: "{{ dns_infoblox[datacenter_final].primario }}, {{ dns_infoblox[datacenter_final].secundario }}"
       when: funcao == 'deploy'
 
     - name: DEPLOY | Executar role Windows 2012 R2
-      include_role:
+      ansible.builtin.include_role:
         name: win2012r2
-      when: 
+      when:
         - funcao == 'deploy'
-        - pode_deploy | default(false)
-        - detected_version | default('') == '2012R2'
+        - pode_deploy | bool
+        - detected_version == '2012R2'
 
     - name: DEPLOY | Executar role Windows 2016
-      include_role:
+      ansible.builtin.include_role:
         name: win2016
-      when: 
+      when:
         - funcao == 'deploy'
-        - pode_deploy | default(false)
-        - detected_version | default('') == '2016'
+        - pode_deploy | bool
+        - detected_version == '2016'
 
     - name: DEPLOY | Executar role Windows 2019
-      include_role:
+      ansible.builtin.include_role:
         name: win2019
-      when: 
+      when:
         - funcao == 'deploy'
-        - pode_deploy | default(false)
-        - detected_version | default('') == '2019'
+        - pode_deploy | bool
+        - detected_version == '2019'
 
     - name: DEPLOY | Executar role Windows 2022
-      include_role:
+      ansible.builtin.include_role:
         name: win2022
-      when: 
+      when:
         - funcao == 'deploy'
-        - pode_deploy | default(false)
-        - detected_version | default('') == '2022'
+        - pode_deploy | bool
+        - detected_version == '2022'
 
     - name: DEPLOY | Executar role Windows 2025
-      include_role:
+      ansible.builtin.include_role:
         name: win2025
-      when: 
+      when:
         - funcao == 'deploy'
-        - pode_deploy | default(false)
-        - detected_version | default('') == '2025'
+        - pode_deploy | bool
+        - detected_version == '2025'
 
-    - name: DEPLOY | Registrar falha de pré-requisito
+    - name: DEPLOY | Marcar execucao
+      ansible.builtin.set_fact:
+        deploy_executado: true
+      when:
+        - funcao == 'deploy'
+        - pode_deploy | bool
+
+    - name: DEPLOY | Reler DNS apos alteracao
+      ansible.windows.win_shell: |
+        $addresses = @(Get-DnsClientServerAddress -AddressFamily IPv4 |
+          Where-Object { $_.InterfaceAlias -notlike '*Loopback*' } |
+          ForEach-Object { $_.ServerAddresses } | Where-Object { $_ })
+        if (($addresses -contains '{{ dns_infoblox[datacenter_final].primario }}') -and
+            ($addresses -contains '{{ dns_infoblox[datacenter_final].secundario }}')) {
+          Write-Output "DNS_ALTERADO_OK"
+        } else {
+          Write-Output "DNS_ALTERADO_FALHA|$($addresses -join ',')"
+        }
+      register: deploy_dns_result
+      when:
+        - funcao == 'deploy'
+        - pode_deploy | bool
+      ignore_errors: true
+      changed_when: false
+
+    - name: DEPLOY | Registrar resultado final
+      ansible.builtin.set_fact:
+        resultado_host: >-
+          {{ resultado_host | combine({
+            'classificacao': ('ALTERADO COM SUCESSO' if (deploy_dns_result.stdout is defined and 'DNS_ALTERADO_OK' in deploy_dns_result.stdout) else 'FAZER MANUALMENTE'),
+            'status': ('ALTERADO' if (deploy_dns_result.stdout is defined and 'DNS_ALTERADO_OK' in deploy_dns_result.stdout) else 'FALHA NA ALTERACAO'),
+            'mensagem': ('DNS alterado e confirmado com os dois Infoblox.' if (deploy_dns_result.stdout is defined and 'DNS_ALTERADO_OK' in deploy_dns_result.stdout) else 'Deploy executado, mas os dois DNS esperados nao foram confirmados.'),
+            'dns_atual': (deploy_dns_result.stdout | default('N/A') | trim)
+          }) }}
+      when:
+        - funcao == 'deploy'
+        - pode_deploy | bool
+
+    # -------------------------------------------------------------------------
+    # POS-VALIDACAO - 100% SOMENTE LEITURA
+    # -------------------------------------------------------------------------
+    - name: POS | Registrar parecer
       ansible.builtin.set_fact:
         resultado_host:
           ip: "{{ inventory_hostname }}"
-          so: "{{ so_detectado | default('Desconhecido') }}"
-          datacenter: "{{ datacenter }}"
+          so: "{{ so_detectado }}"
+          datacenter: "{{ datacenter_final }}"
           funcao: "{{ funcao }}"
-          winrm: >-
-            {%- if not (porta_5985_ok | default(false)) -%}FALHA_REDE
-            {%- elif not (winrm_ok | default(false)) -%}FALHA_SERVICO
-            {%- else -%}OK{%- endif -%}
-          porta_53: >-
-            {%- if not (winrm_ok | default(false)) -%}NAO_TESTADO
-            {%- elif (dns1_ok | default(false)) and (dns2_ok | default(false)) -%}OK
-            {%- else -%}FALHA{%- endif -%}
-          admin_local: >-
-            {%- if not (winrm_ok | default(false)) -%}NAO_TESTADO
-            {%- elif (admin_ok | default(false)) -%}OK
-            {%- else -%}FALHA{%- endif -%}
-          status: "FALHA"
-          tipo_erro: >-
-            {%- if not (porta_5985_ok | default(false)) -%}REDE_5985
-            {%- elif not (winrm_ok | default(false)) -%}WINRM
-            {%- elif not (dns1_ok | default(false)) or not (dns2_ok | default(false)) -%}FIREWALL_53
-            {%- elif not (admin_ok | default(false)) -%}ADMIN_LOCAL
-            {%- else -%}PRE_REQUISITO{%- endif -%}
-          mensagem: >-
-            {%- if not (porta_5985_ok | default(false)) -%}
-              Porta 5985 inacessivel - Firewall/rede bloqueando (Telecom)
-            {%- elif not (winrm_ok | default(false)) -%}
-              WinRM falhou - {{ winrm_erro | default('verificar servico e credenciais') | truncate(100) }}
-            {%- elif not (dns1_ok | default(false)) or not (dns2_ok | default(false)) -%}
-              Porta 53 bloqueada - execute validation primeiro
-            {%- elif not (admin_ok | default(false)) -%}
-              Sem permissao admin local - execute validation primeiro
-            {%- else -%}
-              Pre-requisitos nao atendidos
+          escopo: >-
+            {%- if not (winrm_ok | bool) -%}INDETERMINADO
+            {%- elif detected_version in ['2012R2', '2016', '2019', '2022', '2025'] -%}EM ESCOPO
+            {%- else -%}FORA DE ESCOPO{%- endif -%}
+          dns_esperado: "{{ dns_infoblox[datacenter_final].primario }}, {{ dns_infoblox[datacenter_final].secundario }}"
+          dns_encontrado: "{{ dns_atual_texto }}"
+          teste_dns1: "{{ 'OK' if dns1_ok | bool else 'FALHA' }}"
+          teste_dns2: "{{ 'OK' if dns2_ok | bool else 'FALHA' }}"
+          dhcp: "{{ 'SIM' if dhcp_detectado | bool else 'NAO' }}"
+          status: >-
+            {%- if not (winrm_ok | bool) -%}ERRO DE CONECTIVIDADE
+            {%- elif detected_version not in ['2012R2', '2016', '2019', '2022', '2025'] -%}FORA DE ESCOPO
+            {%- elif dhcp_detectado | bool -%}FORA DE ESCOPO
+            {%- elif not (dns_configurado_ok | bool) -%}FALHA
+            {%- elif not (dns1_ok | bool) or not (dns2_ok | bool) -%}FALHA
+            {%- else -%}SUCESSO{%- endif -%}
+          motivo: >-
+            {%- if not (winrm_ok | bool) -%}WinRM indisponivel.
+            {%- elif detected_version not in ['2012R2', '2016', '2019', '2022', '2025'] -%}Versao Windows fora do escopo dos roles.
+            {%- elif dhcp_detectado | bool -%}Servidor utiliza DHCP; nenhuma alteracao automatica esperada.
+            {%- elif not (dns_configurado_ok | bool) -%}Os dois DNS Infoblox esperados nao estao configurados.
+            {%- elif not (dns1_ok | bool) -%}DNS primario nao respondeu na porta 53.
+            {%- elif not (dns2_ok | bool) -%}DNS secundario nao respondeu na porta 53.
+            {%- else -%}Os dois DNS Infoblox estao configurados e ambos responderam na porta 53.
             {%- endif -%}
-          dns_atual: "{{ dns_atual.stdout | default('N/A') | regex_replace('\\r\\n', ' | ') | truncate(200) }}"
-      when: 
-        - funcao == 'deploy'
-        - not (pode_deploy | default(false))
+          evidencia: >-
+            dns1={{ 'OK' if dns1_ok | bool else 'FALHA' }};
+            dns2={{ 'OK' if dns2_ok | bool else 'FALHA' }};
+            dhcp={{ 'sim' if dhcp_detectado | bool else 'nao' }};
+            dns={{ dns_atual_texto }}
+      when: funcao == 'pos-validacao'
 
-    # =========================================================================
-    # MODO ROLLBACK: EXECUTAR ROLE PARA RESTAURAR DNS
-    # =========================================================================
+    # -------------------------------------------------------------------------
+    # ROLLBACK - usa exatamente os roles existentes por versao
+    # -------------------------------------------------------------------------
     - name: ROLLBACK | Executar role Windows 2012 R2
-      include_role:
+      ansible.builtin.include_role:
         name: win2012r2
-      when: 
+      when:
         - funcao == 'rollback'
-        - winrm_ok | default(false)
-        - detected_version | default('') == '2012R2'
+        - winrm_ok | bool
+        - detected_version == '2012R2'
 
     - name: ROLLBACK | Executar role Windows 2016
-      include_role:
+      ansible.builtin.include_role:
         name: win2016
-      when: 
+      when:
         - funcao == 'rollback'
-        - winrm_ok | default(false)
-        - detected_version | default('') == '2016'
+        - winrm_ok | bool
+        - detected_version == '2016'
 
     - name: ROLLBACK | Executar role Windows 2019
-      include_role:
+      ansible.builtin.include_role:
         name: win2019
-      when: 
+      when:
         - funcao == 'rollback'
-        - winrm_ok | default(false)
-        - detected_version | default('') == '2019'
+        - winrm_ok | bool
+        - detected_version == '2019'
 
     - name: ROLLBACK | Executar role Windows 2022
-      include_role:
+      ansible.builtin.include_role:
         name: win2022
-      when: 
+      when:
         - funcao == 'rollback'
-        - winrm_ok | default(false)
-        - detected_version | default('') == '2022'
+        - winrm_ok | bool
+        - detected_version == '2022'
 
     - name: ROLLBACK | Executar role Windows 2025
-      include_role:
+      ansible.builtin.include_role:
         name: win2025
-      when: 
+      when:
         - funcao == 'rollback'
-        - winrm_ok | default(false)
-        - detected_version | default('') == '2025'
+        - winrm_ok | bool
+        - detected_version == '2025'
 
-    - name: ROLLBACK | Registrar falha de conexão
+    - name: ROLLBACK | Reler DNS apos restauracao
+      ansible.windows.win_shell: |
+        $addresses = @(Get-DnsClientServerAddress -AddressFamily IPv4 |
+          Where-Object { $_.InterfaceAlias -notlike '*Loopback*' } |
+          ForEach-Object { $_.ServerAddresses } | Where-Object { $_ })
+        if ($addresses.Count -eq 0) {
+          Write-Output "DHCP"
+        } else {
+          Write-Output ($addresses -join ',')
+        }
+      register: rollback_dns_result
+      when:
+        - funcao == 'rollback'
+        - winrm_ok | bool
+      ignore_errors: true
+      changed_when: false
+
+    - name: ROLLBACK | Registrar resultado
       ansible.builtin.set_fact:
         resultado_host:
           ip: "{{ inventory_hostname }}"
-          so: "Desconhecido"
-          datacenter: "{{ datacenter }}"
+          so: "{{ so_detectado }}"
+          datacenter: "{{ datacenter_final }}"
           funcao: "{{ funcao }}"
-          winrm: >-
-            {%- if not (porta_5985_ok | default(false)) -%}FALHA_REDE
-            {%- else -%}FALHA_SERVICO{%- endif -%}
-          porta_53: "NAO_TESTADO"
-          admin_local: "NAO_TESTADO"
-          status: "FALHA"
-          tipo_erro: >-
-            {%- if not (porta_5985_ok | default(false)) -%}REDE_5985
-            {%- else -%}WINRM{%- endif -%}
+          status: >-
+            {%- if not (winrm_ok | bool) -%}ERRO DE CONECTIVIDADE
+            {%- elif rollback_dns_result.stdout is defined and rollback_dns_result.stdout | trim | length > 0 -%}EXECUTADO
+            {%- else -%}FALHA{%- endif -%}
           mensagem: >-
-            {%- if not (porta_5985_ok | default(false)) -%}
-              Porta 5985 inacessivel - nao foi possivel conectar para rollback (Telecom)
-            {%- else -%}
-              WinRM falhou - {{ winrm_erro | default('verificar servico e credenciais') | truncate(100) }}
+            {%- if not (winrm_ok | bool) -%}Nao foi possivel conectar ao servidor.
+            {%- elif rollback_dns_result.stdout is defined and rollback_dns_result.stdout | trim | length > 0 -%}Rollback executado; DNS atual: {{ rollback_dns_result.stdout | trim }}
+            {%- else -%}Rollback nao confirmado.
             {%- endif -%}
-          dns_atual: "N/A"
-      when: 
-        - funcao == 'rollback'
-        - not (winrm_ok | default(false))
+          dns_atual: "{{ rollback_dns_result.stdout | default('N/A') | trim }}"
+      when: funcao == 'rollback'
 
 # =============================================================================
-# PLAY 3: GERAR RELATÓRIO E ENVIAR EMAIL
+# PLAY 3: RELATORIO / EMAIL
 # =============================================================================
-- name: Gerar relatorio e enviar email
+- name: Gerar relatorio Windows Infoblox
   hosts: localhost
   gather_facts: true
   connection: local
@@ -543,117 +646,194 @@
       Campinas:
         primario: "10.54.44.12"
         secundario: "10.29.177.82"
-    backup_dir: "C:\\DNS_Backup_Ansible"
     relatorio_excel: "/tmp/infoblox_windows_{{ funcao }}_{{ ansible_date_time.date }}_{{ ansible_date_time.hour }}{{ ansible_date_time.minute }}.xlsx"
 
   tasks:
-    # -------------------------------------------------------------------------
-    # COMPILAR RESULTADOS
-    # -------------------------------------------------------------------------
-    - name: RELATORIO | Compilar todos os resultados
+    - name: RELATORIO | Compilar resultados
       ansible.builtin.set_fact:
         resultados: >-
-          {{
-            groups['windows'] | default([]) | map('extract', hostvars)
-            | selectattr('resultado_host', 'defined')
-            | map(attribute='resultado_host')
-            | list
-          }}
+          {%- set out = [] -%}
+          {%- for h in groups['windows'] | default([]) -%}
+            {%- set r = hostvars[h].resultado_host | default(none) -%}
+            {%- if r is none -%}
+              {%- if funcao == 'pos-validacao' -%}
+                {%- set _ = out.append({'ip': h, 'so': 'Desconhecido', 'datacenter': datacenter, 'status': 'ERRO DE CONECTIVIDADE', 'motivo': 'Host nao foi processado - verificar logs', 'dns_esperado': dns_infoblox[datacenter].primario ~ ', ' ~ dns_infoblox[datacenter].secundario, 'dns_encontrado': '', 'teste_dns1': 'N/A', 'teste_dns2': 'N/A', 'dhcp': 'N/A', 'evidencia': ''}) -%}
+              {%- else -%}
+                {%- set _ = out.append({'ip': h, 'so': 'Desconhecido', 'datacenter': datacenter, 'classificacao': 'FAZER MANUALMENTE', 'status': 'NAO PROCESSADO', 'mensagem': 'Host nao foi processado - verificar logs', 'dns_atual': 'N/A'}) -%}
+              {%- endif -%}
+            {%- else -%}
+              {%- set _ = out.append(r) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
 
-    - name: RELATORIO | Adicionar hosts não processados
-      ansible.builtin.set_fact:
-        resultados: >-
-          {{
-            resultados + [{
-              'ip': item,
-              'so': 'Desconhecido',
-              'datacenter': datacenter | default('N/A'),
-              'funcao': funcao,
-              'winrm': 'NAO_TESTADO',
-              'porta_53': 'NAO_TESTADO',
-              'admin_local': 'NAO_TESTADO',
-              'status': 'FALHA',
-              'tipo_erro': 'NAO_PROCESSADO',
-              'mensagem': 'Host nao foi processado - verificar logs',
-              'dns_atual': 'N/A'
-            }]
-          }}
-      loop: "{{ groups['windows'] | default([]) }}"
-      when: hostvars[item].resultado_host is not defined
-
-    # -------------------------------------------------------------------------
-    # CONTADORES
-    # -------------------------------------------------------------------------
-    - name: RELATORIO | Calcular contadores
+    - name: RELATORIO | Contadores operacionais
       ansible.builtin.set_fact:
         total_hosts: "{{ resultados | length }}"
-        total_ok: "{{ resultados | selectattr('status', 'equalto', 'OK') | list | length }}"
-        total_rede_5985: "{{ resultados | selectattr('tipo_erro', 'equalto', 'REDE_5985') | list | length }}"
-        total_winrm: "{{ resultados | selectattr('tipo_erro', 'equalto', 'WINRM') | list | length }}"
-        total_firewall_53: "{{ resultados | selectattr('tipo_erro', 'equalto', 'FIREWALL_53') | list | length }}"
-        total_admin: "{{ resultados | selectattr('tipo_erro', 'equalto', 'ADMIN_LOCAL') | list | length }}"
-        total_outros: "{{ resultados | selectattr('status', 'equalto', 'FALHA') | rejectattr('tipo_erro', 'in', ['REDE_5985', 'WINRM', 'FIREWALL_53', 'ADMIN_LOCAL']) | list | length }}"
-        total_dhcp: "{{ resultados | selectattr('tipo_erro', 'equalto', 'DHCP') | list | length }}"
+        total_dns_ok: "{{ resultados | selectattr('classificacao', 'equalto', 'DNS JÁ CORRETO') | list | length }}"
+        total_ok_alteracao: "{{ resultados | selectattr('classificacao', 'equalto', 'OK PARA ALTERAÇÃO') | list | length }}"
+        total_dhcp: "{{ resultados | selectattr('classificacao', 'equalto', 'DHCP') | list | length }}"
+        total_manual: "{{ resultados | selectattr('classificacao', 'equalto', 'FAZER MANUALMENTE') | list | length }}"
+      when: funcao in ['validation', 'deploy']
 
-    # -------------------------------------------------------------------------
-    # GERAR PLANILHA EXCEL
-    # -------------------------------------------------------------------------
-    - name: EXCEL | Montar matriz
+    - name: RELATORIO | Contadores pos-validacao
+      ansible.builtin.set_fact:
+        total_hosts: "{{ resultados | length }}"
+        total_sucesso: "{{ resultados | selectattr('status', 'equalto', 'SUCESSO') | list | length }}"
+        total_falha: "{{ resultados | selectattr('status', 'equalto', 'FALHA') | list | length }}"
+        total_fora_escopo: "{{ resultados | selectattr('status', 'equalto', 'FORA DE ESCOPO') | list | length }}"
+        total_erro_conectividade: "{{ resultados | selectattr('status', 'equalto', 'ERRO DE CONECTIVIDADE') | list | length }}"
+      when: funcao == 'pos-validacao'
+
+    - name: RELATORIO | Contadores rollback
+      ansible.builtin.set_fact:
+        total_hosts: "{{ resultados | length }}"
+        total_rollback_ok: "{{ resultados | selectattr('status', 'equalto', 'EXECUTADO') | list | length }}"
+        total_rollback_falha: "{{ resultados | selectattr('status', 'equalto', 'FALHA') | list | length }}"
+        total_rollback_conectividade: "{{ resultados | selectattr('status', 'equalto', 'ERRO DE CONECTIVIDADE') | list | length }}"
+      when: funcao == 'rollback'
+
+    - name: EMAIL | Listas operacionais
+      ansible.builtin.set_fact:
+        lista_dns_ok: >-
+          {% set ips = resultados | selectattr('classificacao', 'equalto', 'DNS JÁ CORRETO') | map(attribute='ip') | list %}
+          {{ ('- ' ~ ips | join('\n- ')) if ips else 'Nenhum' }}
+        lista_ok_alteracao: >-
+          {% set ips = resultados | selectattr('classificacao', 'equalto', 'OK PARA ALTERAÇÃO') | map(attribute='ip') | list %}
+          {{ ('- ' ~ ips | join('\n- ')) if ips else 'Nenhum' }}
+        lista_dhcp: >-
+          {% set ips = resultados | selectattr('classificacao', 'equalto', 'DHCP') | map(attribute='ip') | list %}
+          {{ ('- ' ~ ips | join('\n- ')) if ips else 'Nenhum' }}
+        lista_manual: >-
+          {% set ips = resultados | selectattr('classificacao', 'equalto', 'FAZER MANUALMENTE') | map(attribute='ip') | list %}
+          {{ ('- ' ~ ips | join('\n- ')) if ips else 'Nenhum' }}
+      when: funcao in ['validation', 'deploy']
+
+    - name: EMAIL | Listas pos-validacao
+      ansible.builtin.set_fact:
+        lista_pos_sucesso: >-
+          {% set ips = resultados | selectattr('status', 'equalto', 'SUCESSO') | map(attribute='ip') | list %}
+          {{ ('- ' ~ ips | join('\n- ')) if ips else 'Nenhum' }}
+        lista_pos_falha: >-
+          {% set ips = resultados | selectattr('status', 'equalto', 'FALHA') | map(attribute='ip') | list %}
+          {{ ('- ' ~ ips | join('\n- ')) if ips else 'Nenhum' }}
+        lista_pos_escopo: >-
+          {% set ips = resultados | selectattr('status', 'equalto', 'FORA DE ESCOPO') | map(attribute='ip') | list %}
+          {{ ('- ' ~ ips | join('\n- ')) if ips else 'Nenhum' }}
+        lista_pos_conectividade: >-
+          {% set ips = resultados | selectattr('status', 'equalto', 'ERRO DE CONECTIVIDADE') | map(attribute='ip') | list %}
+          {{ ('- ' ~ ips | join('\n- ')) if ips else 'Nenhum' }}
+      when: funcao == 'pos-validacao'
+
+    - name: EMAIL | Listas rollback
+      ansible.builtin.set_fact:
+        lista_rb_ok: >-
+          {% set ips = resultados | selectattr('status', 'equalto', 'EXECUTADO') | map(attribute='ip') | list %}
+          {{ ('- ' ~ ips | join('\n- ')) if ips else 'Nenhum' }}
+        lista_rb_falha: >-
+          {% set ips = resultados | selectattr('status', 'equalto', 'FALHA') | map(attribute='ip') | list %}
+          {{ ('- ' ~ ips | join('\n- ')) if ips else 'Nenhum' }}
+        lista_rb_conectividade: >-
+          {% set ips = resultados | selectattr('status', 'equalto', 'ERRO DE CONECTIVIDADE') | map(attribute='ip') | list %}
+          {{ ('- ' ~ ips | join('\n- ')) if ips else 'Nenhum' }}
+      when: funcao == 'rollback'
+
+    - name: EXCEL | Montar matriz validation/deploy
       ansible.builtin.set_fact:
         excel_matrix: >-
           {%- set matrix = [] -%}
           {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 1, 'cell_value': 'RELATORIO INFOBLOX WINDOWS - ' ~ funcao | upper}) -%}
-          {%- set _ = matrix.append({'cell_row': 3, 'cell_col': 1, 'cell_value': 'Data/Hora:'}) -%}
-          {%- set _ = matrix.append({'cell_row': 3, 'cell_col': 2, 'cell_value': ansible_date_time.date ~ ' ' ~ ansible_date_time.time}) -%}
-          {%- set _ = matrix.append({'cell_row': 4, 'cell_col': 1, 'cell_value': 'Datacenter:'}) -%}
-          {%- set _ = matrix.append({'cell_row': 4, 'cell_col': 2, 'cell_value': datacenter | default('N/A')}) -%}
-          {%- set _ = matrix.append({'cell_row': 5, 'cell_col': 1, 'cell_value': 'RDM:'}) -%}
-          {%- set _ = matrix.append({'cell_row': 5, 'cell_col': 2, 'cell_value': rdm | default('N/A')}) -%}
-          {%- set _ = matrix.append({'cell_row': 6, 'cell_col': 1, 'cell_value': 'Funcao:'}) -%}
-          {%- set _ = matrix.append({'cell_row': 6, 'cell_col': 2, 'cell_value': funcao | upper}) -%}
-          {%- set _ = matrix.append({'cell_row': 7, 'cell_col': 1, 'cell_value': 'DNS Primario:'}) -%}
-          {%- set _ = matrix.append({'cell_row': 7, 'cell_col': 2, 'cell_value': dns_infoblox[datacenter].primario}) -%}
-          {%- set _ = matrix.append({'cell_row': 8, 'cell_col': 1, 'cell_value': 'DNS Secundario:'}) -%}
-          {%- set _ = matrix.append({'cell_row': 8, 'cell_col': 2, 'cell_value': dns_infoblox[datacenter].secundario}) -%}
-          {%- set _ = matrix.append({'cell_row': 10, 'cell_col': 1, 'cell_value': 'RESUMO'}) -%}
-          {%- set _ = matrix.append({'cell_row': 11, 'cell_col': 1, 'cell_value': 'Total:'}) -%}
-          {%- set _ = matrix.append({'cell_row': 11, 'cell_col': 2, 'cell_value': total_hosts}) -%}
-          {%- set _ = matrix.append({'cell_row': 12, 'cell_col': 1, 'cell_value': 'OK:'}) -%}
-          {%- set _ = matrix.append({'cell_row': 12, 'cell_col': 2, 'cell_value': total_ok}) -%}
-          {%- set _ = matrix.append({'cell_row': 13, 'cell_col': 1, 'cell_value': 'Falha Rede/5985 (Telecom):'}) -%}
-          {%- set _ = matrix.append({'cell_row': 13, 'cell_col': 2, 'cell_value': total_rede_5985}) -%}
-          {%- set _ = matrix.append({'cell_row': 14, 'cell_col': 1, 'cell_value': 'Falha WinRM (Servico/Auth):'}) -%}
-          {%- set _ = matrix.append({'cell_row': 14, 'cell_col': 2, 'cell_value': total_winrm}) -%}
-          {%- set _ = matrix.append({'cell_row': 15, 'cell_col': 1, 'cell_value': 'Falha Porta 53:'}) -%}
-          {%- set _ = matrix.append({'cell_row': 15, 'cell_col': 2, 'cell_value': total_firewall_53}) -%}
-          {%- set _ = matrix.append({'cell_row': 16, 'cell_col': 1, 'cell_value': 'Falha Admin Local:'}) -%}
-          {%- set _ = matrix.append({'cell_row': 16, 'cell_col': 2, 'cell_value': total_admin}) -%}
-          {%- set _ = matrix.append({'cell_row': 17, 'cell_col': 1, 'cell_value': 'DHCP Ignorado:'}) -%}
-          {%- set _ = matrix.append({'cell_row': 17, 'cell_col': 2, 'cell_value': total_dhcp}) -%}
-          {%- set _ = matrix.append({'cell_row': 18, 'cell_col': 1, 'cell_value': 'Outros:'}) -%}
-          {%- set _ = matrix.append({'cell_row': 18, 'cell_col': 2, 'cell_value': total_outros}) -%}
-          {%- set _ = matrix.append({'cell_row': 20, 'cell_col': 1, 'cell_value': 'IP'}) -%}
-          {%- set _ = matrix.append({'cell_row': 20, 'cell_col': 2, 'cell_value': 'SO'}) -%}
-          {%- set _ = matrix.append({'cell_row': 20, 'cell_col': 3, 'cell_value': 'WINRM'}) -%}
-          {%- set _ = matrix.append({'cell_row': 20, 'cell_col': 4, 'cell_value': 'PORTA_53'}) -%}
-          {%- set _ = matrix.append({'cell_row': 20, 'cell_col': 5, 'cell_value': 'ADMIN_LOCAL'}) -%}
-          {%- set _ = matrix.append({'cell_row': 20, 'cell_col': 6, 'cell_value': 'STATUS'}) -%}
-          {%- set _ = matrix.append({'cell_row': 20, 'cell_col': 7, 'cell_value': 'TIPO_ERRO'}) -%}
-          {%- set _ = matrix.append({'cell_row': 20, 'cell_col': 8, 'cell_value': 'MENSAGEM'}) -%}
-          {%- set _ = matrix.append({'cell_row': 20, 'cell_col': 9, 'cell_value': 'DNS_ATUAL'}) -%}
+          {%- set resumo = [
+            ['Data/Hora:', ansible_date_time.date ~ ' ' ~ ansible_date_time.time],
+            ['Datacenter:', datacenter],
+            ['RDM:', rdm | default('N/A')],
+            ['DNS Primario:', dns_infoblox[datacenter].primario],
+            ['DNS Secundario:', dns_infoblox[datacenter].secundario],
+            ['Total de hosts:', total_hosts],
+            ['DNS JÁ CORRETO:', total_dns_ok],
+            ['OK PARA ALTERAÇÃO:', total_ok_alteracao],
+            ['DHCP:', total_dhcp],
+            ['FAZER MANUALMENTE:', total_manual]
+          ] -%}
+          {%- for p in resumo -%}
+            {%- set _ = matrix.append({'cell_row': loop.index + 2, 'cell_col': 1, 'cell_value': p[0]}) -%}
+            {%- set _ = matrix.append({'cell_row': loop.index + 2, 'cell_col': 2, 'cell_value': p[1]}) -%}
+          {%- endfor -%}
+          {%- set _ = matrix.append({'cell_row': 14, 'cell_col': 1, 'cell_value': 'IP'}) -%}
+          {%- set _ = matrix.append({'cell_row': 14, 'cell_col': 2, 'cell_value': 'SO'}) -%}
+          {%- set _ = matrix.append({'cell_row': 14, 'cell_col': 3, 'cell_value': 'CLASSIFICACAO'}) -%}
+          {%- set _ = matrix.append({'cell_row': 14, 'cell_col': 4, 'cell_value': 'DNS ATUAL'}) -%}
+          {%- set _ = matrix.append({'cell_row': 14, 'cell_col': 5, 'cell_value': 'MOTIVO'}) -%}
           {%- for item in resultados -%}
-            {%- set row = loop.index + 20 -%}
-            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 1, 'cell_value': item.ip}) -%}
-            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 2, 'cell_value': item.so | default('N/A')}) -%}
-            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 3, 'cell_value': item.winrm | default('N/A') | trim}) -%}
-            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 4, 'cell_value': item.porta_53 | default('N/A') | trim}) -%}
-            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 5, 'cell_value': item.admin_local | default('N/A') | trim}) -%}
-            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 6, 'cell_value': item.status | default('N/A') | trim}) -%}
-            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 7, 'cell_value': item.tipo_erro | default('N/A') | trim}) -%}
-            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 8, 'cell_value': item.mensagem | default('N/A') | trim}) -%}
-            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 9, 'cell_value': item.dns_atual | default('N/A') | trim}) -%}
+            {%- set row = loop.index + 14 -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 1, 'cell_value': item.ip | default('')}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 2, 'cell_value': item.so | default('') | trim}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 3, 'cell_value': item.classificacao | default(item.status | default('N/A')) | trim}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 4, 'cell_value': item.dns_atual | default(item.dns_encontrado | default('N/A')) | trim}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 5, 'cell_value': item.mensagem | default(item.motivo | default('N/A')) | trim}) -%}
           {%- endfor -%}
           {{ matrix }}
+      when: funcao in ['validation', 'deploy']
+
+    - name: EXCEL | Montar matriz pos-validacao
+      ansible.builtin.set_fact:
+        excel_matrix: >-
+          {%- set matrix = [] -%}
+          {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 1, 'cell_value': 'PARECER POS-VALIDACAO GMUD INFOBLOX - WINDOWS'}) -%}
+          {%- set resumo = [
+            ['Data/Hora:', ansible_date_time.date ~ ' ' ~ ansible_date_time.time],
+            ['Datacenter:', datacenter],
+            ['RDM:', rdm | default('N/A')],
+            ['Total analisado:', total_hosts],
+            ['Sucesso:', total_sucesso],
+            ['Falha:', total_falha],
+            ['Fora de escopo:', total_fora_escopo],
+            ['Erro de conectividade:', total_erro_conectividade]
+          ] -%}
+          {%- for p in resumo -%}
+            {%- set _ = matrix.append({'cell_row': loop.index + 2, 'cell_col': 1, 'cell_value': p[0]}) -%}
+            {%- set _ = matrix.append({'cell_row': loop.index + 2, 'cell_col': 2, 'cell_value': p[1]}) -%}
+          {%- endfor -%}
+          {%- for h in ['IP','DATACENTER','SO','ESCOPO','DNS ESPERADO','DNS ENCONTRADO','TESTE DNS 1','TESTE DNS 2','DHCP','STATUS FINAL','MOTIVO','EVIDENCIA'] -%}
+            {%- set _ = matrix.append({'cell_row': 12, 'cell_col': loop.index, 'cell_value': h}) -%}
+          {%- endfor -%}
+          {%- for item in resultados -%}
+            {%- set row = loop.index + 12 -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 1, 'cell_value': item.ip | default('')}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 2, 'cell_value': item.datacenter | default('')}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 3, 'cell_value': item.so | default('')}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 4, 'cell_value': item.escopo | default('')}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 5, 'cell_value': item.dns_esperado | default('')}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 6, 'cell_value': item.dns_encontrado | default('')}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 7, 'cell_value': item.teste_dns1 | default('')}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 8, 'cell_value': item.teste_dns2 | default('')}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 9, 'cell_value': item.dhcp | default('')}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 10, 'cell_value': item.status | default('')}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 11, 'cell_value': item.motivo | default('')}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 12, 'cell_value': item.evidencia | default('')}) -%}
+          {%- endfor -%}
+          {{ matrix }}
+      when: funcao == 'pos-validacao'
+
+    - name: EXCEL | Montar matriz rollback
+      ansible.builtin.set_fact:
+        excel_matrix: >-
+          {%- set matrix = [] -%}
+          {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 1, 'cell_value': 'RELATORIO ROLLBACK INFOBLOX WINDOWS'}) -%}
+          {%- for h in ['IP','SO','DATACENTER','STATUS','DNS ATUAL','MENSAGEM'] -%}
+            {%- set _ = matrix.append({'cell_row': 4, 'cell_col': loop.index, 'cell_value': h}) -%}
+          {%- endfor -%}
+          {%- for item in resultados -%}
+            {%- set row = loop.index + 4 -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 1, 'cell_value': item.ip | default('')}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 2, 'cell_value': item.so | default('')}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 3, 'cell_value': item.datacenter | default('')}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 4, 'cell_value': item.status | default('')}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 5, 'cell_value': item.dns_atual | default('')}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 6, 'cell_value': item.mensagem | default('')}) -%}
+          {%- endfor -%}
+          {{ matrix }}
+      when: funcao == 'rollback'
 
     - name: EXCEL | Criar planilha
       ans2dev.general.open_xl:
@@ -662,162 +842,165 @@
         sheet_name: "Infoblox Windows"
         updates_matrix: "{{ excel_matrix }}"
 
-    # -------------------------------------------------------------------------
-    # MONTAR LISTAS PARA EMAIL
-    # -------------------------------------------------------------------------
-    - name: EMAIL | Lista OK
-      ansible.builtin.set_fact:
-        lista_ok: "{% for r in resultados if r.status | trim == 'OK' %}\n- {{ r.ip }} ({{ r.so | default('N/A') }}){% endfor %}"
-
-    - name: EMAIL | Lista REDE_5985
-      ansible.builtin.set_fact:
-        lista_rede_5985: "{% for r in resultados if r.tipo_erro | trim == 'REDE_5985' %}\n- {{ r.ip }}{% endfor %}"
-
-    - name: EMAIL | Lista WINRM
-      ansible.builtin.set_fact:
-        lista_winrm: "{% for r in resultados if r.tipo_erro | trim == 'WINRM' %}\n- {{ r.ip }} | {{ r.mensagem | default('N/A') | trim }}{% endfor %}"
-
-    - name: EMAIL | Lista FIREWALL_53
-      ansible.builtin.set_fact:
-        lista_firewall_53: "{% for r in resultados if r.tipo_erro | trim == 'FIREWALL_53' %}\n- {{ r.ip }} | {{ r.porta_53 | default('N/A') }}{% endfor %}"
-
-    - name: EMAIL | Lista ADMIN_LOCAL
-      ansible.builtin.set_fact:
-        lista_admin: "{% for r in resultados if r.tipo_erro | trim == 'ADMIN_LOCAL' %}\n- {{ r.ip }}{% endfor %}"
-
-    - name: EMAIL | Lista OUTROS
-      ansible.builtin.set_fact:
-        lista_outros: "{% for r in resultados if r.status | trim == 'FALHA' and r.tipo_erro | trim not in ['REDE_5985', 'WINRM', 'FIREWALL_53', 'ADMIN_LOCAL'] %}\n- {{ r.ip }} | {{ r.mensagem | default('N/A') }}{% endfor %}"
-
-    - name: EMAIL | Lista DHCP
-      ansible.builtin.set_fact:
-        lista_dhcp: "{% for r in resultados if r.tipo_erro | trim == 'DHCP' %}\n- {{ r.ip }}{% endfor %}"
-
-    # -------------------------------------------------------------------------
-    # EXIBIR RELATÓRIO
-    # -------------------------------------------------------------------------
-    - name: RELATORIO | Exibir no console
+    - name: RELATORIO | Exibir console validation/deploy
       ansible.builtin.debug:
         msg: |
-          ================================================================
+          ================================================================================
           RELATORIO INFOBLOX WINDOWS - {{ funcao | upper }}
-          ================================================================
-          Data/Hora: {{ ansible_date_time.date }} {{ ansible_date_time.time }}
-          Datacenter: {{ datacenter | default('N/A') }}
-          RDM: {{ rdm | default('N/A') }}
-          DNS: {{ dns_infoblox[datacenter].primario }} / {{ dns_infoblox[datacenter].secundario }}
-          Total de hosts: {{ total_hosts }}
-          ----------------------------------------------------------------
-          OK ({{ total_ok }}):{{ lista_ok | default('\n  Nenhum') }}
-          
-          FALHA REDE/5985 - TELECOM ({{ total_rede_5985 }}):{{ lista_rede_5985 | default('\n  Nenhum') }}
-          
-          FALHA WINRM - SERVICO/AUTH ({{ total_winrm }}):{{ lista_winrm | default('\n  Nenhum') }}
-          
-          FALHA PORTA 53 ({{ total_firewall_53 }}):{{ lista_firewall_53 | default('\n  Nenhum') }}
-          
-          FALHA ADMIN LOCAL ({{ total_admin }}):{{ lista_admin | default('\n  Nenhum') }}
-          
-          SERVIDORES DHCP ({{ total_dhcp }}):{{ lista_dhcp | default('\n  Nenhum') }}
-          
-          OUTROS ({{ total_outros }}):{{ lista_outros | default('\n  Nenhum') }}
-          ================================================================
-          Planilha: {{ relatorio_excel }}
-          ================================================================
+          ================================================================================
+          Total: {{ total_hosts }}
+          DNS JÁ CORRETO ({{ total_dns_ok }}):
+          {{ lista_dns_ok }}
+          OK PARA ALTERAÇÃO ({{ total_ok_alteracao }}):
+          {{ lista_ok_alteracao }}
+          DHCP ({{ total_dhcp }}):
+          {{ lista_dhcp }}
+          FAZER MANUALMENTE ({{ total_manual }}):
+          {{ lista_manual }}
+          ================================================================================
+      when: funcao in ['validation', 'deploy']
 
-    # -------------------------------------------------------------------------
-    # ENVIAR EMAIL
-    # -------------------------------------------------------------------------
-    - name: EMAIL | Enviar relatório
+    - name: RELATORIO | Exibir console pos-validacao
+      ansible.builtin.debug:
+        msg: |
+          ================================================================================
+          PARECER POS-VALIDACAO GMUD INFOBLOX - WINDOWS
+          ================================================================================
+          Total: {{ total_hosts }}
+          SUCESSO ({{ total_sucesso }}):
+          {{ lista_pos_sucesso }}
+          FALHA ({{ total_falha }}):
+          {{ lista_pos_falha }}
+          FORA DE ESCOPO ({{ total_fora_escopo }}):
+          {{ lista_pos_escopo }}
+          ERRO DE CONECTIVIDADE ({{ total_erro_conectividade }}):
+          {{ lista_pos_conectividade }}
+          ================================================================================
+      when: funcao == 'pos-validacao'
+
+    - name: RELATORIO | Exibir console rollback
+      ansible.builtin.debug:
+        msg: |
+          ================================================================================
+          ROLLBACK INFOBLOX WINDOWS
+          ================================================================================
+          EXECUTADO ({{ total_rollback_ok }}):
+          {{ lista_rb_ok }}
+          FALHA ({{ total_rollback_falha }}):
+          {{ lista_rb_falha }}
+          ERRO DE CONECTIVIDADE ({{ total_rollback_conectividade }}):
+          {{ lista_rb_conectividade }}
+          ================================================================================
+      when: funcao == 'rollback'
+
+    - name: EMAIL | Enviar relatorio validation/deploy
       community.general.mail:
         host: vip_smtp.claro.com.br
         port: 25
         from: coeeaiops@claro.com.br
         to: "{{ email_destino }}"
-        subject: "Relatorio Infoblox Windows {{ funcao | upper }} - {{ datacenter | default('N/A') }} - {{ ansible_date_time.date }}"
+        subject: "Relatorio Infoblox Windows {{ funcao | upper }} - {{ datacenter }} - {{ ansible_date_time.date }}"
         subtype: plain
         attach:
           - "{{ relatorio_excel }}"
         body: |
           Prezado(a),
-          
-          Segue o relatorio de {{ funcao | upper }} DNS Infoblox em servidores Windows.
-          
-          ================================================================
-          RESUMO
-          ================================================================
-          Data/Hora: {{ ansible_date_time.date }} {{ ansible_date_time.time }}
-          Datacenter: {{ datacenter | default('N/A') }}
-          RDM: {{ rdm | default('N/A') }}
-          Funcao: {{ funcao | upper }}
-          DNS Primario: {{ dns_infoblox[datacenter].primario }}
-          DNS Secundario: {{ dns_infoblox[datacenter].secundario }}
-          Total de hosts: {{ total_hosts }}
-          
-          OK: {{ total_ok }}
-          Falha Rede/5985 (Telecom): {{ total_rede_5985 }}
-          Falha WinRM (Servico/Auth): {{ total_winrm }}
-          Falha Porta 53: {{ total_firewall_53 }}
-          Falha Admin Local: {{ total_admin }}
-          DHCP IGNORADO: {{ total_dhcp }}
-          Outros: {{ total_outros }}
-          
-          ================================================================
-          OK ({{ total_ok }})
-          ================================================================{{ lista_ok | default('\nNenhum') }}
-          
-          ================================================================
-          FALHA REDE/5985 - TELECOM ({{ total_rede_5985 }})
-          ================================================================{{ lista_rede_5985 | default('\nNenhum') }}
-          
-          ACAO: Porta 5985 inacessivel pela rede. Abrir chamado para equipe
-          de Telecom solicitar liberacao de firewall na porta TCP 5985 (WinRM).
-          
-          ================================================================
-          FALHA WINRM - SERVICO/AUTH ({{ total_winrm }})
-          ================================================================{{ lista_winrm | default('\nNenhum') }}
-          
-          ACAO: Porta 5985 acessivel, porem o servico WinRM nao respondeu.
-          Verificar com equipe Windows:
-          - Servico WinRM esta rodando? (Get-Service WinRM)
-          - Listener configurado? (winrm enumerate winrm/config/listener)
-          - Credencial CyberArk valida para este servidor?
-          
-          ================================================================
-          FALHA PORTA 53 ({{ total_firewall_53 }})
-          ================================================================{{ lista_firewall_53 | default('\nNenhum') }}
-          
-          ACAO: Solicitar liberacao TCP/UDP para DNS Infoblox na porta 53
-          - DNS Primario: {{ dns_infoblox[datacenter].primario }}
-          - DNS Secundario: {{ dns_infoblox[datacenter].secundario }}
-          
-          ================================================================
-          FALHA ADMIN LOCAL ({{ total_admin }})
-          ================================================================{{ lista_admin | default('\nNenhum') }}
-          
-          ACAO: Verificar se a conta possui privilegios de Administrador Local
-          
-          ================================================================
-          SERVIDORES DHCP ({{ total_dhcp }})
-          ================================================================{{ lista_dhcp | default('\nNenhum') }}
-          Estes servidores utilizam DHCP.
-          Nenhuma alteração foi realizada pois o DNS será obtido automaticamente pelo lease DHCP.
 
-          ================================================================
-          OUTROS ({{ total_outros }})
-          ================================================================{{ lista_outros | default('\nNenhum') }}
-          
-          ================================================================
-          {% if funcao == 'deploy' %}
-          BACKUP: Os backups foram salvos em {{ backup_dir }} nos servidores
-          {% endif %}
-          {% if funcao == 'rollback' %}
-          ROLLBACK: DNS restaurado para configuracao DHCP
-          {% endif %}
-          
-          Planilha detalhada em anexo.
-          
-          Este e um email automatico gerado pelo Ansible.
-      when: 
-        - email_destino is defined 
+          Segue o relatorio de {{ funcao | upper }} DNS Infoblox em servidores Windows.
+
+          DNS esperado: {{ dns_infoblox[datacenter].primario }} e {{ dns_infoblox[datacenter].secundario }}
+          Total de hosts: {{ total_hosts }}
+
+          DNS JÁ CORRETO: {{ total_dns_ok }}
+          OK PARA ALTERAÇÃO: {{ total_ok_alteracao }}
+          DHCP: {{ total_dhcp }}
+          FAZER MANUALMENTE: {{ total_manual }}
+
+          DNS JÁ CORRETO ({{ total_dns_ok }})
+          {{ lista_dns_ok }}
+
+          OK PARA ALTERAÇÃO ({{ total_ok_alteracao }})
+          {{ lista_ok_alteracao }}
+
+          DHCP ({{ total_dhcp }})
+          {{ lista_dhcp }}
+
+          FAZER MANUALMENTE ({{ total_manual }})
+          {{ lista_manual }}
+
+          A planilha detalhada segue em anexo.
+      when:
+        - funcao in ['validation', 'deploy']
+        - email_destino is defined
+        - email_destino | length > 0
+
+    - name: EMAIL | Enviar parecer pos-validacao
+      community.general.mail:
+        host: vip_smtp.claro.com.br
+        port: 25
+        from: coeeaiops@claro.com.br
+        to: "{{ email_destino }}"
+        subject: "PÓS-VALIDAÇÃO GMUD INFOBLOX WINDOWS - {{ datacenter }} - RDM {{ rdm | default('N/A') }} - {{ ansible_date_time.date }}"
+        subtype: plain
+        attach:
+          - "{{ relatorio_excel }}"
+        body: |
+          Prezado(a),
+
+          Segue o parecer de PÓS-VALIDAÇÃO da GMUD INFOBLOX em servidores Windows.
+          Execucao somente leitura.
+
+          Total analisado: {{ total_hosts }}
+          Sucesso: {{ total_sucesso }}
+          Falha: {{ total_falha }}
+          Fora de escopo: {{ total_fora_escopo }}
+          Erro de conectividade: {{ total_erro_conectividade }}
+
+          SUCESSO ({{ total_sucesso }})
+          {{ lista_pos_sucesso }}
+
+          FALHA ({{ total_falha }})
+          {{ lista_pos_falha }}
+
+          FORA DE ESCOPO ({{ total_fora_escopo }})
+          {{ lista_pos_escopo }}
+
+          ERRO DE CONECTIVIDADE ({{ total_erro_conectividade }})
+          {{ lista_pos_conectividade }}
+
+          DNS esperado: {{ dns_infoblox[datacenter].primario }} e {{ dns_infoblox[datacenter].secundario }}
+          A planilha detalhada segue em anexo.
+      when:
+        - funcao == 'pos-validacao'
+        - email_destino is defined
+        - email_destino | length > 0
+
+    - name: EMAIL | Enviar relatorio rollback
+      community.general.mail:
+        host: vip_smtp.claro.com.br
+        port: 25
+        from: coeeaiops@claro.com.br
+        to: "{{ email_destino }}"
+        subject: "Relatorio Infoblox Windows ROLLBACK - {{ datacenter }} - RDM {{ rdm | default('N/A') }} - {{ ansible_date_time.date }}"
+        subtype: plain
+        attach:
+          - "{{ relatorio_excel }}"
+        body: |
+          Prezado(a),
+
+          Segue o relatorio de ROLLBACK DNS Infoblox em servidores Windows.
+
+          EXECUTADO ({{ total_rollback_ok }})
+          {{ lista_rb_ok }}
+
+          FALHA ({{ total_rollback_falha }})
+          {{ lista_rb_falha }}
+
+          ERRO DE CONECTIVIDADE ({{ total_rollback_conectividade }})
+          {{ lista_rb_conectividade }}
+
+          A planilha detalhada segue em anexo.
+      when:
+        - funcao == 'rollback'
+        - email_destino is defined
         - email_destino | length > 0
