@@ -43,3 +43,15 @@
 - name: Exibir certificados para validação
   ansible.builtin.debug:
     var: certificados_para_atualizar
+
+- name: Validar estrutura dos certificados
+  ansible.builtin.debug:
+    msg:
+      - "Tipo da variável: {{ certificados_para_atualizar | type_debug }}"
+      - "Quantidade de certificados: {{ certificados_para_atualizar | length }}"
+      - "Primeiro certificado: {{ certificados_para_atualizar | first }}"
+
+- name: Atualizar certificados no Zabbix
+  ansible.builtin.debug:
+    msg: "Host={{ item.host }}, validade={{ item.validade }}"
+  loop: "{{ certificados_para_atualizar }}"
