@@ -1,0 +1,45 @@
+- name: Inicializar lista de certificados
+  ansible.builtin.set_fact:
+    certificados_para_atualizar: []
+
+- name: Extrair hosts e validades das descrições do Jira
+  ansible.builtin.set_fact:
+    certificados_para_atualizar: >-
+      {% set resultado = namespace(certificados=[]) %}
+      {% for ticket in tickets_certificados | default([]) %}
+      {% set estado = namespace(validade='') %}
+      {% for bloco in ticket.fields.description.content | default([]) %}
+      {% if bloco.type == 'paragraph' %}
+      {% set texto = bloco.content | default([])
+         | selectattr('type', 'equalto', 'text')
+         | map(attribute='text')
+         | join('')
+         | trim %}
+      {% if texto is match('^[0-9]{2}/[0-9]{2}/[0-9]{4}$') %}
+      {% set estado.validade = texto %}
+      {% endif %}
+      {% elif bloco.type == 'bulletList' %}
+      {% for item in bloco.content | default([]) %}
+      {% for paragrafo in item.content | default([]) %}
+      {% if paragrafo.type == 'paragraph' %}
+      {% set host = paragrafo.content | default([])
+         | selectattr('type', 'equalto', 'text')
+         | map(attribute='text')
+         | join('')
+         | trim %}
+      {% if host and estado.validade %}
+      {% set resultado.certificados = resultado.certificados + [
+        {'host': host, 'validade': estado.validade}
+      ] %}
+      {% endif %}
+      {% endif %}
+      {% endfor %}
+      {% endfor %}
+      {% endif %}
+      {% endfor %}
+      {% endfor %}
+      {{ resultado.certificados | to_yaml | from_yaml }}
+
+- name: Exibir certificados para validação
+  ansible.builtin.debug:
+    var: certificados_para_atualizar

@@ -1,0 +1,267 @@
+---
+# =============================================================================
+# ROLE: Windows Server 2025 - DNS Infoblox
+# Apenas DEPLOY e ROLLBACK (validation está no playbook principal)
+# Comandos: PowerShell
+# Configura TODAS as interfaces ativas (equivalente ao resolv.conf no Linux)
+# =============================================================================
+
+# -------------------------------------------------------------------------
+# DEPLOY MODE
+# -------------------------------------------------------------------------
+- name: "WIN2025 | DEPLOY | Criar diretório de backup"
+  ansible.windows.win_file:
+    path: "{{ backup_dir }}"
+    state: directory
+  when: funcao == 'deploy'
+  ignore_errors: true
+
+- name: "WIN2025 | DEPLOY | Backup da configuração DNS"
+  ansible.windows.win_shell: |
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $backupFile = "{{ backup_dir }}\dns_backup_$timestamp.json"
+    $adapters = Get-NetAdapter | Where-Object {
+      $_.Status -eq 'Up' -and
+      $_.InterfaceDescription -notlike '*Virtual*' -and
+      $_.InterfaceDescription -notlike '*Loopback*'
+    }
+    $backupData = @()
+    foreach ($adapter in $adapters) {
+      $dns = Get-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4
+      $backupData += @{
+        InterfaceIndex = $adapter.InterfaceIndex
+        InterfaceName = $adapter.Name
+        ServerAddresses = ($dns.ServerAddresses -join ",")
+      }
+    }
+    $backupData | ConvertTo-Json | Out-File $backupFile -Encoding UTF8
+    Write-Output $backupFile
+  register: backup_result
+  when: funcao == 'deploy'
+  ignore_errors: true
+
+- name: "WIN2025 | DEPLOY | Configurar DNS em TODAS as interfaces ativas"
+  ansible.windows.win_shell: |
+    $adapters = Get-NetAdapter | Where-Object {
+      $_.Status -eq 'Up' -and
+      $_.InterfaceDescription -notlike '*Virtual*' -and
+      $_.InterfaceDescription -notlike '*Loopback*'
+    } | Where-Object {
+      (Get-NetIPInterface -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4).Dhcp -eq 'Disabled'
+    }
+
+    if (($adapters | Measure-Object).Count -eq 0) {
+      Write-Output "SOMENTE_DHCP"
+      exit 0
+    }
+
+    $total = ($adapters | Measure-Object).Count
+    $ok = 0
+    $erros = @()
+
+    foreach ($adapter in $adapters) {
+      try {
+        Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses ("{{ dns_infoblox[datacenter_final | default(datacenter)].primario }}","{{ dns_infoblox[datacenter_final | default(datacenter)].secundario }}") -ErrorAction Stop
+        $ok++
+      } catch {
+        $erros += "$($adapter.Name): $_"
+      }
+    }
+
+    Write-Output "TOTAL=$total"
+    Write-Output "OK=$ok"
+
+    if ($ok -eq $total -and $total -gt 0) {
+      Write-Output "CONFIG_OK"
+    } else {
+      Write-Output "CONFIG_FALHA"
+      if ($erros.Count -gt 0) {
+        Write-Output "ERROS=$($erros -join ' | ')"
+      }
+    }
+  register: set_dns
+  when: funcao == 'deploy'
+  ignore_errors: true
+
+- name: "WIN2025 | DEPLOY | Limpar cache DNS"
+  ansible.windows.win_shell: Clear-DnsClientCache
+  when: funcao == 'deploy'
+  ignore_errors: true
+
+- name: "WIN2025 | DEPLOY | Verificar nova configuração"
+  ansible.windows.win_shell: |
+    $dns = Get-DnsClientServerAddress -AddressFamily IPv4 | 
+           Where-Object { $_.InterfaceAlias -notlike '*Loopback*' -and $_.ServerAddresses.Count -gt 0 } |
+           Select-Object -First 1
+    if ($dns) {
+      Write-Output ($dns.ServerAddresses -join ",")
+    } else {
+      Write-Output "DHCP"
+    }
+  register: dns_novo
+  when: funcao == 'deploy'
+  ignore_errors: true
+
+- name: "WIN2025 | DEPLOY | Registrar resultado"
+  ansible.builtin.set_fact:
+    resultado_host:
+      ip: "{{ inventory_hostname }}"
+      so: "Windows Server 2025"
+      datacenter: "{{ datacenter }}"
+      funcao: "{{ funcao }}"
+      winrm: "OK"
+      porta_53: "OK"
+      admin_local: "OK"
+
+      status: >-
+        {%- if set_dns.stdout is defined and 'SOMENTE_DHCP' in set_dns.stdout -%}
+        SKIPPED
+        {%- elif set_dns.stdout is defined and 'CONFIG_OK' in set_dns.stdout -%}
+        OK
+        {%- else -%}
+        FALHA
+        {%- endif -%}
+
+      tipo_erro: >-
+        {%- if set_dns.stdout is defined and 'SOMENTE_DHCP' in set_dns.stdout -%}
+        DHCP
+        {%- elif set_dns.stdout is defined and 'CONFIG_OK' in set_dns.stdout -%}
+        NENHUM
+        {%- else -%}
+        CONFIG_DNS
+        {%- endif -%}
+
+      mensagem: >-
+        {%- if set_dns.stdout is defined and 'SOMENTE_DHCP' in set_dns.stdout -%}
+          Servidor utiliza DHCP. Nenhuma alteração realizada.
+        {%- elif set_dns.stdout is defined and 'CONFIG_OK' in set_dns.stdout -%}
+          DNS configurado: {{ dns_infoblox[datacenter_final | default(datacenter)].primario }},{{ dns_infoblox[datacenter_final | default(datacenter)].secundario }}
+        {%- else -%}
+          Erro ao configurar DNS - verificar logs
+        {%- endif -%}
+
+      dns_atual: "{{ dns_novo.stdout | default('N/A') | trim }}"
+  when: funcao == 'deploy'
+
+# -------------------------------------------------------------------------
+# ROLLBACK MODE
+# -------------------------------------------------------------------------
+- name: "WIN2025 | ROLLBACK | Buscar último backup"
+  ansible.windows.win_shell: |
+    $backups = Get-ChildItem "{{ backup_dir }}\dns_backup_*.json" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
+    if ($backups) {
+      Write-Output $backups[0].FullName
+    } else {
+      Write-Output "BACKUP_NAO_ENCONTRADO"
+    }
+  register: backup_file
+  when: funcao == 'rollback'
+  ignore_errors: true
+
+- name: "WIN2025 | ROLLBACK | Restaurar DNS do backup"
+  ansible.windows.win_shell: |
+    $backupPath = "{{ backup_file.stdout | trim }}"
+    if (Test-Path $backupPath) {
+      $backupData = Get-Content $backupPath -Raw | ConvertFrom-Json
+      $total = ($backupData | Measure-Object).Count
+      $ok = 0
+      foreach ($item in $backupData) {
+        try {
+          if ($item.ServerAddresses -eq "" -or $item.ServerAddresses -eq "DHCP") {
+            Set-DnsClientServerAddress -InterfaceIndex $item.InterfaceIndex -ResetServerAddresses -ErrorAction Stop
+          } else {
+            $dnsServers = $item.ServerAddresses -split ","
+            Set-DnsClientServerAddress -InterfaceIndex $item.InterfaceIndex -ServerAddresses $dnsServers -ErrorAction Stop
+          }
+          $ok++
+        } catch {}
+      }
+      Write-Output "TOTAL=$total OK=$ok"
+      if ($ok -eq $total -and $total -gt 0) {
+        Write-Output "ROLLBACK_OK"
+      } else {
+        Write-Output "ROLLBACK_FALHA"
+      }
+    } else {
+      Write-Output "ROLLBACK_FALHA"
+    }
+  register: rollback_result
+  when: 
+    - funcao == 'rollback'
+    - backup_file.stdout is defined
+    - "'BACKUP_NAO_ENCONTRADO' not in backup_file.stdout"
+  ignore_errors: true
+
+- name: "WIN2025 | ROLLBACK | Fallback para DHCP (sem backup)"
+  ansible.windows.win_shell: |
+    $adapters = Get-NetAdapter | Where-Object {
+      $_.Status -eq 'Up' -and
+      $_.InterfaceDescription -notlike '*Virtual*' -and
+      $_.InterfaceDescription -notlike '*Loopback*'
+    }
+    $total = ($adapters | Measure-Object).Count
+    $ok = 0
+    foreach ($adapter in $adapters) {
+      try {
+        Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ResetServerAddresses -ErrorAction Stop
+        $ok++
+      } catch {}
+    }
+    Write-Output "TOTAL=$total OK=$ok"
+    if ($ok -eq $total -and $total -gt 0) {
+      Write-Output "ROLLBACK_OK"
+    } else {
+      Write-Output "ROLLBACK_FALHA"
+    }
+  register: rollback_dhcp
+  when: 
+    - funcao == 'rollback'
+    - backup_file.stdout is defined
+    - "'BACKUP_NAO_ENCONTRADO' in backup_file.stdout"
+  ignore_errors: true
+
+- name: "WIN2025 | ROLLBACK | Limpar cache DNS"
+  ansible.windows.win_shell: Clear-DnsClientCache
+  when: funcao == 'rollback'
+  ignore_errors: true
+
+- name: "WIN2025 | ROLLBACK | Verificar configuração"
+  ansible.windows.win_shell: |
+    $dns = Get-DnsClientServerAddress -AddressFamily IPv4 | 
+           Where-Object { $_.InterfaceAlias -notlike '*Loopback*' -and $_.ServerAddresses.Count -gt 0 } |
+           Select-Object -First 1
+    if ($dns) {
+      Write-Output ($dns.ServerAddresses -join ",")
+    } else {
+      Write-Output "DHCP"
+    }
+  register: dns_pos_rollback
+  when: funcao == 'rollback'
+  ignore_errors: true
+
+- name: "WIN2025 | ROLLBACK | Registrar resultado"
+  ansible.builtin.set_fact:
+    resultado_host:
+      ip: "{{ inventory_hostname }}"
+      so: "Windows Server 2025"
+      datacenter: "{{ datacenter }}"
+      funcao: "{{ funcao }}"
+      winrm: "OK"
+      porta_53: "N/A"
+      admin_local: "N/A"
+      status: >-
+        {%- if (rollback_result.stdout is defined and 'ROLLBACK_OK' in rollback_result.stdout) or 
+               (rollback_dhcp.stdout is defined and 'ROLLBACK_OK' in rollback_dhcp.stdout) -%}OK{%- else -%}FALHA{%- endif -%}
+      tipo_erro: >-
+        {%- if (rollback_result.stdout is defined and 'ROLLBACK_OK' in rollback_result.stdout) or 
+               (rollback_dhcp.stdout is defined and 'ROLLBACK_OK' in rollback_dhcp.stdout) -%}NENHUM{%- else -%}ROLLBACK_FALHOU{%- endif -%}
+      mensagem: >-
+        {%- if rollback_result.stdout is defined and 'ROLLBACK_OK' in rollback_result.stdout -%}
+          Rollback OK - DNS restaurado do backup
+        {%- elif rollback_dhcp.stdout is defined and 'ROLLBACK_OK' in rollback_dhcp.stdout -%}
+          Rollback OK - DNS restaurado para DHCP (sem backup)
+        {%- else -%}
+          Erro no rollback - verificar logs
+        {%- endif -%}
+      dns_atual: "{{ dns_pos_rollback.stdout | default('N/A') | trim }}"
+  when: funcao == 'rollback'

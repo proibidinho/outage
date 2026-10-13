@@ -1,0 +1,79 @@
+- name: Testando conexão na porta 53 com o IP 10.29.177.81
+  ansible.builtin.raw: |
+    IP="10.29.177.81"
+    NC_OK=0
+    TELNET_OK=0
+    DIG_OK=0
+    NMAP_OK=0
+
+    if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+      nc -z -w2 "$IP" 53 >/dev/null 2>&1 && NC_OK=1
+    elif command -v telnet >/dev/null 2>&1; then
+      telnet_output=$(echo quit | telnet "$IP" 53 2>/dev/null)
+      echo "$telnet_output" | grep -q "Escape character" && TELNET_OK=1
+    fi
+
+    if command -v dig >/dev/null 2>&1; then
+      dig_output=$(dig @"$IP" google.com +time=2 +tries=1 2>/dev/null)
+      echo "$dig_output" | grep -q "ANSWER SECTION" && DIG_OK=1
+    fi
+
+    if command -v nmap >/dev/null 2>&1; then
+      nmap_output=$(nmap -p 53 -Pn --host-timeout 5s "$IP" 2>/dev/null)
+      echo "$nmap_output" | grep "53/tcp" | grep -q "open" && NMAP_OK=1
+    fi
+
+    if [ "$NC_OK" -eq 1 ] || [ "$TELNET_OK" -eq 1 ] || [ "$DIG_OK" -eq 1 ] || [ "$NMAP_OK" -eq 1 ]; then
+      echo "DNS_OK"
+    else
+      echo "DNS_FALHA"
+    fi
+  register: dns_one
+
+- name: Testando conexão na porta 53 com o IP 10.53.22.102
+  ansible.builtin.raw: |
+    IP="10.53.22.102"
+    NC_OK=0
+    TELNET_OK=0
+    DIG_OK=0
+    NMAP_OK=0
+
+    if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q '\-z'; then
+      nc -z -w2 "$IP" 53 >/dev/null 2>&1 && NC_OK=1
+    elif command -v telnet >/dev/null 2>&1; then
+      telnet_output=$(echo quit | telnet "$IP" 53 2>/dev/null)
+      echo "$telnet_output" | grep -q "Escape character" && TELNET_OK=1
+    fi
+
+    if command -v dig >/dev/null 2>&1; then
+      dig_output=$(dig @"$IP" google.com +time=2 +tries=1 2>/dev/null)
+      echo "$dig_output" | grep -q "ANSWER SECTION" && DIG_OK=1
+    fi
+
+    if command -v nmap >/dev/null 2>&1; then
+      nmap_output=$(nmap -p 53 -Pn --host-timeout 5s "$IP" 2>/dev/null)
+      echo "$nmap_output" | grep "53/tcp" | grep -q "open" && NMAP_OK=1
+    fi
+
+    if [ "$NC_OK" -eq 1 ] || [ "$TELNET_OK" -eq 1 ] || [ "$DIG_OK" -eq 1 ] || [ "$NMAP_OK" -eq 1 ]; then
+      echo "DNS_OK"
+    else
+      echo "DNS_FALHA"
+    fi
+  register: dns_two
+
+- name: Validando os servidores que comunicaram com sucesso na porta 53
+  ansible.builtin.set_fact:
+    dns_one_sucesso: "{{ 'DNS_OK' in (dns_one.stdout | default('')) }}"
+    dns_two_sucesso: "{{ 'DNS_OK' in (dns_two.stdout | default('')) }}"
+    dns_one_ok: "{{ 'DNS_OK' in (dns_one.stdout | default('')) }}"
+    dns_two_ok: "{{ 'DNS_OK' in (dns_two.stdout | default('')) }}"
+- name: Lista de servidores que falharam na conexão com a porta 53
+  ansible.builtin.fail:
+    msg: "❌ Porta 53 não acessível. Favor solicitar regra de firewall."
+  when: dns_one_ok == false or dns_two_ok == false
+
+- name: Lista de servidores que comunicaram com a porta 53
+  ansible.builtin.debug:
+    msg: "✅ Porta 53 comunidando."
+  when: dns_one_ok == true and dns_two_ok == true
