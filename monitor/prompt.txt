@@ -1,0 +1,276 @@
+CONTEXTO
+
+Estou desenvolvendo uma automação Ansible para o Jira.
+
+O objetivo é localizar solicitações de renovação de certificados e posteriormente atualizar alertas de expiração de certificados no Zabbix.
+
+Já consegui identificar os chamados corretamente.
+
+A automação atualmente faz:
+
+```yaml
+- name: Buscar atualizações de alerta
+  ansible.builtin.uri:
+    url: "{{ jira_base_url }}/rest/api/3/search/jql"
+    method: POST
+    force_basic_auth: true
+    user: "{{ jira_user }}"
+    password: "{{ jira_password }}"
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+    body_format: json
+    body:
+      jql: >-
+        project = {{ projeto_jira }}
+        AND summary ~ "\"Atualização de alerta\""
+        AND statusCategory != Done
+      maxResults: 1000
+      fields:
+        - summary
+        - description
+        - customfield_10238
+  register: jira_search
+
+- name: Selecionar tickets de atualização de alerta
+  ansible.builtin.set_fact:
+    tickets_certificados: >-
+      {{
+        jira_search.json.issues
+        | selectattr('fields.summary', 'equalto', 'Atualização de alerta')
+        | list
+      }}
+
+
+IMPORTANTE
+
+Futuramente pretendo filtrar também pelo grupo:
+
+YAML
+fields.customfield_10238.name ==
+"CLBR-TI-OPS-IT_SERVICE_MONITORING"
+
+mas neste momento esse filtro está desabilitado porque os chamados estão chegando inicialmente na minha fila.
+
+Após a descoberta dos tickets tenho uma estrutura semelhante a:
+
+YAML
+tickets_certificados:
+- key: PDST-2581520
+fields:
+summary: Atualização de alerta
+description:
+type: doc
+content: [...]
+
+DESCRIÇÃO DO PROBLEMA
+
+O campo description vem no formato ADF (Atlassian Document Format).
+
+Eu já extraí e validei o conteúdo completo.
+
+Exemplo real simplificado:
+
+JSON
+{
+"type": "doc",
+"content": [
+{
+"type": "paragraph",
+"content": [
+{
+"type": "text",
+"text": "19/03/2027"
+}
+]
+},
+{
+"type": "bulletList",
+"content": [
+{
+"type": "listItem",
+"content": [
+{
+"type": "paragraph",
+"content": [
+{
+"type": "text",
+"text": "icops.claro.com.br"
+}
+]
+}
+]
+}
+]
+},
+{
+"type": "paragraph",
+"content": [
+{
+"type": "text",
+"text": "23/03/2027"
+}
+]
+},
+{
+"type": "bulletList",
+"content": [
+{
+"type": "listItem",
+"content": [
+{
+"type": "paragraph",
+"content": [
+{
+"type": "text",
+"text": "clarocluberest.claro.com.br"
+}
+]
+}
+]
+},
+{
+"type": "listItem",
+"content": [
+{
+"type": "paragraph",
+"content": [
+{
+"type": "text",
+"text": "hmlg.institutoclaro.org.br"
+}
+]
+}
+]
+}
+]
+},
+{
+"type": "paragraph",
+"content": [
+{
+"type": "text",
+"text": "24/03/2027"
+}
+]
+},
+{
+"type": "bulletList",
+"content": [
+{
+"type": "listItem",
+"content": [
+{
+"type": "paragraph",
+"content": [
+{
+"type": "text",
+"text": "portaltecnico.clarobrasil.mobi"
+}
+]
+}
+]
+}
+]
+}
+]
+}
+
+PADRÃO IDENTIFICADO
+
+O padrão é sempre:
+
+DATA
+
+logo abaixo
+
+LISTA DE HOSTS
+
+Exemplo:
+
+Plain Text
+19/03/2027
+- icops.claro.com.br
+ 
+23/03/2027
+- clarocluberest.claro.com.br
+- hmlg.institutoclaro.org.br
+ 
+24/03/2027
+- portaltecnico.clarobrasil.mobi
+ 
+30/03/2027
+- netsalesmfa.claro.com.br
+- netsmsmfa.claro.com.br
+
+Pode haver dezenas de datas e centenas de hosts.
+
+OBJETIVO
+
+Preciso transformar essa estrutura ADF em uma variável Ansible simples para ser consumida posteriormente por uma automação Zabbix.
+
+Resultado esperado:
+
+YAML
+certificados_para_atualizar:
+ 
+- host: icops.claro.com.br
+validade: "19/03/2027"
+ 
+- host: clarocluberest.claro.com.br
+validade: "23/03/2027"
+ 
+- host: hmlg.institutoclaro.org.br
+validade: "23/03/2027"
+ 
+- host: portaltecnico.clarobrasil.mobi
+validade: "24/03/2027"
+ 
+- host: netsalesmfa.claro.com.br
+validade: "30/03/2027"
+ 
+- host: netsmsmfa.claro.com.br
+validade: "30/03/2027"
+
+REQUISITOS IMPORTANTES
+
+Não criar role nova.
+Não criar plugin custom.
+Não criar filtro custom.
+Não criar script Python externo.
+Não criar include_tasks.
+Não criar arquivos temporários.
+Não criar uma solução exageradamente complexa.
+Priorizar simplicidade e legibilidade.
+O código deve ficar fácil para qualquer operador Ansible entender.
+Evitar Jinja excessivamente complexo.
+Evitar blocos enormes difíceis de manter.
+Se possível, quebrar em poucas tasks claras e objetivas.
+
+RESULTADO FINAL ESPERADO
+
+No final quero apenas uma variável:
+
+YAML
+certificados_para_atualizar
+
+para ser utilizada posteriormente assim:
+
+YAML
+- name: Atualizar certificados no Zabbix
+loop: "{{ certificados_para_atualizar }}"
+
+consumindo:
+
+YAML
+item.host
+item.validade
+
+PEDIDO
+
+Com base no ADF real fornecido acima, forneça a forma mais simples, legível, funcional e de fácil manutenção para montar a variável:
+
+YAML
+certificados_para_atualizar
+
+em Ansible.
