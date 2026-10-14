@@ -19,7 +19,7 @@
 #   SIMULADO       aplicar_alteracoes = false (nada foi gravado)
 #   JA_EXISTE      já há item para host + tipo (não cria; para mudar
 #                  a data use chamado de atualização)
-#   SEM_MODELO     não há item-modelo do mesmo tipo no host, ou o nome
+#   SEM_MODELO     não há item-modelo Enabled do mesmo tipo no host, ou o nome
 #                  dele não permite derivar o nome do novo item
 #   CONFLITO       chamados pedem validades diferentes para o mesmo
 #                  certificado (não cria)
@@ -140,10 +140,12 @@
          | selectattr('host', 'equalto', item.host | lower)
          | selectattr('tipo', 'equalto', item.tipo | lower)
          | list }}
-    # item-modelo: primeiro item (menor itemid) do mesmo tipo
+    # item-modelo: primeiro item Enabled (menor itemid) do mesmo tipo.
+    # Só Enabled, porque o status do modelo é copiado para o item novo.
     modelo: >-
       {{ zbx_certs
          | selectattr('tipo', 'equalto', item.tipo | lower)
+         | selectattr('item.status', 'equalto', '0')
          | first
          | default({}) }}
     # o nome do modelo precisa conter o host para podermos trocá-lo
@@ -165,7 +167,7 @@
       {{ 'Tipo não identificado na descrição do chamado (esperado Externo ou Interno).' if status == 'TIPO_INVALIDO'
          else 'Chamados pedem validades diferentes para o mesmo certificado (' ~ (datas_pedidas | join(', ')) ~ '). Nada foi criado.' if status == 'CONFLITO'
          else 'Já existe item para este host e tipo (itemid ' ~ existentes[0].itemid ~ ', validade ' ~ existentes[0].data ~ '). Nada foi criado; para mudar a data use um chamado de atualização.' if status == 'JA_EXISTE'
-         else 'Sem item-modelo do tipo ' ~ item.tipo ~ ' no host, ou o nome do modelo não contém o host. Nada foi criado.' if status == 'SEM_MODELO'
+         else 'Sem item-modelo Enabled do tipo ' ~ item.tipo ~ ' no host, ou o nome do modelo não contém o host. Nada foi criado.' if status == 'SEM_MODELO'
          else 'Aguardando criação.' }}
     nome: >-
       {{ modelo.item.name | replace(modelo.host_orig, item.host) | replace(modelo.data, item.validade) if status == 'PENDENTE' else '' }}

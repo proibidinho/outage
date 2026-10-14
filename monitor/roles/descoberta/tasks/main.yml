@@ -101,11 +101,15 @@
 # ============================================================
 # 4. Extrair certificados da descrição (ADF)
 #
-# Extração ADF preservada. Mudanças:
-#   - cada certificado agora carrega 'ticket' e 'operacao'
-#     (ATUALIZACAO ou CRIACAO, conforme o summary do chamado);
-#   - o resultado vai para certificados_jira, que no passo 5 é
-#     separado nas duas listas consumidas pelas roles.
+# 4a. Esquema "tipo + data + hosts em lista com marcadores": extração
+#     ADF preservada. Vale para chamados de atualização e também para
+#     criação, caso o corpo siga o mesmo esquema. Cada certificado
+#     carrega 'ticket' e 'operacao' (conforme o summary do chamado).
+#     Resultado em certificados_jira.
+# 4b. Esquema "Rótulo: valor" (chamados de criação): extração própria,
+#     logo abaixo, que lê parágrafos e também itens de lista.
+#     Resultado em certificados_criacao_jira.
+# Um mesmo chamado só gera certificados por um dos esquemas.
 # ============================================================
 
 - name: Inicializar lista de certificados
@@ -168,6 +172,78 @@
   ansible.builtin.set_fact:
     certificados_jira: "{{ certificados_jira | from_yaml }}"
 
+# ------------------------------------------------------------
+# 4b. Chamados de CRIAÇÃO. O corpo vem assim:
+#
+#   Nome completo do certificado: clarocustodioa.claro.com.br
+#   Tipo de certificado: Interno
+#   Data de renovação: 06/10/2027
+#
+# Cada linha pode chegar como parágrafo separado ou como um único
+# parágrafo com quebras de linha (hardBreak no ADF); os dois casos
+# são tratados. O rótulo é reconhecido pelo começo (não depende de
+# acento). Um certificado por chamado; "*." no início do host vira
+# "star.", igual à atualização. Chamado sem host ou sem data válida
+# não gera certificado (e é avisado na task seguinte).
+# ------------------------------------------------------------
+- name: Extrair certificado dos chamados de criação
+  ansible.builtin.set_fact:
+    certificados_criacao_jira: >-
+      {%- set resultado = namespace(certificados=[]) -%}
+      {%- for ticket in tickets_certificados | default([]) | selectattr('fields.summary', 'equalto', jira_resumo_criacao) -%}
+      {%- set cert = namespace(host='', tipo='', validade='') -%}
+      {%- set pars = namespace(lista=[]) -%}
+      {%- for bloco in ticket.fields.description.content | default([]) -%}
+      {%- if bloco.type == 'paragraph' -%}
+      {%- set pars.lista = pars.lista + [bloco] -%}
+      {%- elif bloco.type in ['bulletList', 'orderedList'] -%}
+      {%- for li in bloco.content | default([]) -%}
+      {%- for pg in li.content | default([]) if pg.type == 'paragraph' -%}
+      {%- set pars.lista = pars.lista + [pg] -%}
+      {%- endfor -%}
+      {%- endfor -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- for bloco in pars.lista -%}
+      {%- set t = namespace(texto='') -%}
+      {%- for no in bloco.content | default([]) -%}
+      {%- if no.type == 'text' -%}
+      {%- set t.texto = t.texto ~ no.text -%}
+      {%- elif no.type == 'hardBreak' -%}
+      {%- set t.texto = t.texto ~ '\n' -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- for linha in t.texto.split('\n') if ':' in linha -%}
+      {%- set rotulo = linha.split(':', 1)[0] | trim | lower -%}
+      {%- set valor = linha.split(':', 1)[1] | trim -%}
+      {%- if rotulo.startswith('nome completo') -%}
+      {%- set cert.host = valor | regex_replace('^\\*\\.', 'star.') -%}
+      {%- elif rotulo.startswith('tipo de certificado') -%}
+      {%- set cert.tipo = 'Externo' if valor | upper == 'EXTERNO' else 'Interno' if valor | upper in ['INTERNO', 'INTERNOS'] else '' -%}
+      {%- elif rotulo.startswith('data de renova') and valor is match('^[0-9]{2}/[0-9]{2}/[0-9]{4}$') -%}
+      {%- set cert.validade = valor -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- endfor -%}
+      {%- if cert.host and cert.validade -%}
+      {%- set resultado.certificados = resultado.certificados + [{'ticket': ticket.key, 'operacao': 'CRIACAO', 'host': cert.host, 'tipo': cert.tipo, 'validade': cert.validade}] -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ resultado.certificados }}
+
+- name: Avisar sobre chamados de criação sem certificado reconhecido
+  ansible.builtin.debug:
+    msg: "Chamado {{ item.key }} ignorado: não foi possível ler host e data de renovação válidos da descrição."
+  loop: >-
+    {{
+      tickets_certificados
+      | selectattr('fields.summary', 'equalto', jira_resumo_criacao)
+      | rejectattr('key', 'in', (certificados_jira + certificados_criacao_jira) | map(attribute='ticket') | list)
+      | list
+    }}
+  loop_control:
+    label: "{{ item.key }}"
+
 # ============================================================
 # 5. Separar atualização x criação (nunca se misturam).
 #    certificados_para_atualizar mantém o nome original.
@@ -177,7 +253,7 @@
 - name: Separar certificados de atualização e de criação
   ansible.builtin.set_fact:
     certificados_para_atualizar: "{{ certificados_jira | selectattr('operacao', 'equalto', 'ATUALIZACAO') | unique | list }}"
-    certificados_para_criar: "{{ certificados_jira | selectattr('operacao', 'equalto', 'CRIACAO') | unique | list }}"
+    certificados_para_criar: "{{ (certificados_jira | selectattr('operacao', 'equalto', 'CRIACAO') | list + certificados_criacao_jira) | unique | list }}"
 
 - name: Exibir certificados encontrados
   ansible.builtin.debug:
@@ -187,6 +263,6 @@
       host: "{{ item.host }}"
       tipo: "{{ item.tipo }}"
       validade: "{{ item.validade }}"
-  loop: "{{ certificados_jira }}"
+  loop: "{{ certificados_para_atualizar + certificados_para_criar }}"
   loop_control:
     label: "{{ item.operacao }} {{ item.host }}"
