@@ -1,0 +1,667 @@
+
+############################################################
+# ./playbook.yml
+############################################################
+---
+- name: Atualiza certificados no Zabbix baseado em chamado de GA
+  hosts: localhost
+  gather_facts: true
+  environment:
+    TZ: "America/Sao_Paulo"
+
+  roles:
+    # Cria o host virtual usado pelas tasks do Zabbix
+    - role: inventory
+    
+    # Procura o chamado de GA.
+    - role: descoberta
+
+    # # Localiza os ativos e atualiza a data do certificado
+    - role: atualiza
+
+    # # Envia o relatorio
+    # - role: relatorios
+
+############################################################
+# ./roles/atualiza/tasks/main.yml
+############################################################
+---
+# ============================================================
+# Recebe da role descoberta:
+#
+# certificados_para_atualizar:
+#   - host: netsmsmfa.claro.com.br
+#     validade: 30/03/2027
+#
+# ============================================================
+
+- name: Verificar se há certificados para processar
+  ansible.builtin.debug:
+    msg: "Nenhum certificado encontrado para atualização."
+  when: certificados_para_atualizar | default([]) | length == 0
+
+- name: Processar certificados no Zabbix
+  ansible.builtin.include_tasks: zabbix.yml
+  loop: "{{ certificados_para_atualizar | default([]) }}"
+  loop_control:
+    loop_var: certificado
+    label: "{{ certificado.host }}"
+  when: certificados_para_atualizar | default([]) | length > 0
+
+############################################################
+# ./roles/atualiza/tasks/zabbix.yml
+############################################################
+---
+# ============================================================
+# Entrada:
+#
+# certificado.host
+# certificado.validade
+# ============================================================
+
+- name: Mostrar certificado em processamento
+  ansible.builtin.debug:
+    msg:
+      host: "{{ certificado.host }}"
+      validade: "{{ certificado.validade }}"
+
+# ============================================================
+# Montar URL da API do Zabbix
+# ============================================================
+
+- name: Montar URL da API
+  ansible.builtin.set_fact:
+    zabbix_api_url: >-
+      http{% if zabbix_use_ssl %}s{% endif %}://{{ zabbix_host }}
+      {% if zabbix_port not in [80,443] %}:{{ zabbix_port }}{% endif %}
+      {% if zabbix_url_path | length > 0 %}/{{ zabbix_url_path }}{% endif %}/api_jsonrpc.php
+
+# ============================================================
+# Buscar item do certificado
+#
+# Exemplo de key:
+# zbx_valida_data_certificado[
+#   "netsmsmfa.claro.com.br",
+#   "Externo",
+#   "30/03/2027"
+# ]
+# ============================================================
+
+- name: Buscar item pela API do Zabbix
+  ansible.builtin.uri:
+    url: "{{ zabbix_api_url | replace(' ', '') }}"
+    method: POST
+    body_format: json
+    headers:
+      Content-Type: application/json-rpc
+    body:
+      jsonrpc: "2.0"
+      method: "item.get"
+      params:
+        host: "CERTIFICADOS_CLARO_BRASIL"
+        search:
+          key_: "{{ certificado.host }}"
+        output:
+          - itemid
+          - name
+          - key_
+      auth: "{{ zabbix_api_token }}"
+      id: 1
+    validate_certs: "{{ zabbix_validate_certs }}"
+  delegate_to: localhost
+  register: zbx_item
+
+# ============================================================
+# Quantidade encontrada
+# ============================================================
+
+- name: Mostrar quantidade encontrada
+  ansible.builtin.debug:
+    msg:
+      host: "{{ certificado.host }}"
+      encontrados: "{{ zbx_item.json.result | length }}"
+
+# ============================================================
+# Mostrar item encontrado
+# ============================================================
+
+- name: Exibir item encontrado
+  ansible.builtin.debug:
+    msg:
+      itemid: "{{ item.itemid }}"
+      nome: "{{ item.name }}"
+      key: "{{ item.key_ }}"
+  loop: "{{ zbx_item.json.result | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Mostrar relação Jira x Zabbix
+  ansible.builtin.debug:
+    msg:
+      jira_host: "{{ certificado.host }}"
+      jira_validade: "{{ certificado.validade }}"
+      zabbix_itemid: "{{ item.itemid }}"
+      zabbix_nome: "{{ item.name }}"
+      zabbix_key: "{{ item.key_ }}"
+  loop: "{{ zbx_item.json.result | default([]) }}"
+  loop_control:
+    label: "{{ item.itemid }}"
+    
+# - name: Montar nova key
+#   ansible.builtin.debug:
+#     msg:
+#       antiga: "{{ item.key_ }}"
+#       nova: >-
+#         {{
+#           item.key_
+#           | regex_replace(
+#               '[0-9]{2}/[0-9]{2}/[0-9]{4}(?="\\])',
+#               certificado.validade
+#             )
+#         }}
+#   loop: "{{ zbx_item.json.result | default([]) }}"
+
+############################################################
+# ./roles/atualiza/vars/main.yml
+############################################################
+---
+# gmuds:
+#   - chave: "GML-TESTE"
+#     resumo: "Teste de criação de Maintenance Window"
+#     inicio: "2026-09-18T13:05:00.000-0300"
+#     fim: "2026-09-18T18:00:00.000-0300"
+#     ativos:
+#       - "net002prdlnx795"
+
+# gmuds:
+#   - chave: "GML-TESTE"
+#     resumo: "Teste Dynatrace"
+#     inicio: "2026-09-18T18:08:00.000-0300"
+#     fim: "2026-09-18T19:10:00.000-0300"
+#     ativos:
+#       - "901269"
+
+############################################################
+# ./roles/cria/tasks/main.yml
+############################################################
+---
+# ============================================================
+# Recebe da role descoberta:
+#
+# certificados_para_atualizar:
+#   - host: netsmsmfa.claro.com.br
+#     validade: 30/03/2027
+#
+# ============================================================
+
+- name: Verificar se há certificados para processar
+  ansible.builtin.debug:
+    msg: "Nenhum certificado encontrado para atualização."
+  when: certificados_para_atualizar | default([]) | length == 0
+
+- name: Processar certificados no Zabbix
+  ansible.builtin.include_tasks: zabbix.yml
+  loop: "{{ certificados_para_atualizar | default([]) }}"
+  loop_control:
+    loop_var: certificado
+    label: "{{ certificado.host }}"
+  when: certificados_para_atualizar | default([]) | length > 0
+
+############################################################
+# ./roles/cria/tasks/zabbix.yml
+############################################################
+---
+# ============================================================
+# Entrada:
+#
+# certificado.host
+# certificado.validade
+# ============================================================
+
+- name: Mostrar certificado em processamento
+  ansible.builtin.debug:
+    msg:
+      host: "{{ certificado.host }}"
+      validade: "{{ certificado.validade }}"
+
+# ============================================================
+# Montar URL da API do Zabbix
+# ============================================================
+
+- name: Montar URL da API
+  ansible.builtin.set_fact:
+    zabbix_api_url: >-
+      http{% if zabbix_use_ssl %}s{% endif %}://{{ zabbix_host }}
+      {% if zabbix_port not in [80,443] %}:{{ zabbix_port }}{% endif %}
+      {% if zabbix_url_path | length > 0 %}/{{ zabbix_url_path }}{% endif %}/api_jsonrpc.php
+
+# ============================================================
+# Buscar item do certificado
+#
+# Exemplo de key:
+# zbx_valida_data_certificado[
+#   "netsmsmfa.claro.com.br",
+#   "Externo",
+#   "30/03/2027"
+# ]
+# ============================================================
+
+- name: Buscar item pela API do Zabbix
+  ansible.builtin.uri:
+    url: "{{ zabbix_api_url | replace(' ', '') }}"
+    method: POST
+    body_format: json
+    headers:
+      Content-Type: application/json-rpc
+    body:
+      jsonrpc: "2.0"
+      method: "item.get"
+      params:
+        host: "CERTIFICADOS_CLARO_BRASIL"
+        search:
+          key_: "{{ certificado.host }}"
+        output:
+          - itemid
+          - name
+          - key_
+      auth: "{{ zabbix_api_token }}"
+      id: 1
+    validate_certs: "{{ zabbix_validate_certs }}"
+  delegate_to: localhost
+  register: zbx_item
+
+# ============================================================
+# Quantidade encontrada
+# ============================================================
+
+- name: Mostrar quantidade encontrada
+  ansible.builtin.debug:
+    msg:
+      host: "{{ certificado.host }}"
+      encontrados: "{{ zbx_item.json.result | length }}"
+
+# ============================================================
+# Mostrar item encontrado
+# ============================================================
+
+- name: Exibir item encontrado
+  ansible.builtin.debug:
+    msg:
+      itemid: "{{ item.itemid }}"
+      nome: "{{ item.name }}"
+      key: "{{ item.key_ }}"
+  loop: "{{ zbx_item.json.result | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Mostrar relação Jira x Zabbix
+  ansible.builtin.debug:
+    msg:
+      jira_host: "{{ certificado.host }}"
+      jira_validade: "{{ certificado.validade }}"
+      zabbix_itemid: "{{ item.itemid }}"
+      zabbix_nome: "{{ item.name }}"
+      zabbix_key: "{{ item.key_ }}"
+  loop: "{{ zbx_item.json.result | default([]) }}"
+  loop_control:
+    label: "{{ item.itemid }}"
+    
+# - name: Montar nova key
+#   ansible.builtin.debug:
+#     msg:
+#       antiga: "{{ item.key_ }}"
+#       nova: >-
+#         {{
+#           item.key_
+#           | regex_replace(
+#               '[0-9]{2}/[0-9]{2}/[0-9]{4}(?="\\])',
+#               certificado.validade
+#             )
+#         }}
+#   loop: "{{ zbx_item.json.result | default([]) }}"
+
+############################################################
+# ./roles/cria/vars/main.yml
+############################################################
+---
+# gmuds:
+#   - chave: "GML-TESTE"
+#     resumo: "Teste de criação de Maintenance Window"
+#     inicio: "2026-09-18T13:05:00.000-0300"
+#     fim: "2026-09-18T18:00:00.000-0300"
+#     ativos:
+#       - "net002prdlnx795"
+
+# gmuds:
+#   - chave: "GML-TESTE"
+#     resumo: "Teste Dynatrace"
+#     inicio: "2026-09-18T18:08:00.000-0300"
+#     fim: "2026-09-18T19:10:00.000-0300"
+#     ativos:
+#       - "901269"
+
+############################################################
+# ./roles/descoberta/tasks/main.yml
+############################################################
+# ============================================================
+# 1. Buscar chamados candidatos
+# ============================================================
+
+- name: Buscar atualizações de alerta
+  ansible.builtin.uri:
+    url: "{{ jira_base_url }}/rest/api/3/search/jql"
+    method: POST
+    force_basic_auth: true
+    user: "{{ jira_user }}"
+    password: "{{ jira_password }}"
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+    body_format: json
+    body:
+      jql: >-
+        project = {{ projeto_jira }}
+        AND summary ~ "\"Atualização de Alerta de Certificado - Zabbix\""
+        AND statusCategory != Done
+      maxResults: 1000
+      fields:
+        - summary
+        - description
+        - customfield_10238
+    status_code: 200
+  register: jira_search
+  environment: "{{ proxy_env }}"
+
+# ============================================================
+# 2. Manter somente chamados válidos
+# ============================================================
+
+# ============================================================
+# FUTURAMENTE REATIVAR:
+#
+# | selectattr('fields.customfield_10238', 'defined')
+# | selectattr(
+#     'fields.customfield_10238.name',
+#     'equalto',
+#     'CLBR-TI-OPS-IT_SERVICE_MONITORING'
+#   )
+#
+# ============================================================
+
+- name: Selecionar tickets de atualização de alerta
+  ansible.builtin.set_fact:
+    tickets_certificados: >-
+      {{
+        jira_search.json.issues
+        | selectattr('fields.summary', 'equalto', 'Atualização de alerta')
+        | list
+      }}
+# ============================================================
+# 3. Mostrar resultado
+# ============================================================
+
+- name: Mostrar chamados encontrados
+  debug:
+    msg:
+      ticket: "{{ item.key }}"
+      resumo: "{{ item.fields.summary }}"
+      blocos_adf: "{{ item.fields.description.content | length }}"
+  loop: "{{ tickets_certificados }}"
+
+
+# - name: Mostrar somente tipo dos blocos
+#   debug:
+#     msg:
+#       tipo: "{{ bloco.type }}"
+#       texto: "{{ bloco.content[0].text | default('') }}"
+#   loop: "{{ tickets_certificados[0].fields.description.content }}"
+#   loop_control:
+#     loop_var: bloco
+
+- name: Inicializar lista de certificados
+  ansible.builtin.set_fact:
+    certificados_para_atualizar: []
+
+- name: Extrair hosts e validades das descrições do Jira
+  ansible.builtin.set_fact:
+    certificados_para_atualizar: >-
+      {% set resultado = namespace(certificados=[]) %}
+      {% for ticket in tickets_certificados | default([]) %}
+      {% set estado = namespace(validade='', tipo='') %}
+      {% for bloco in ticket.fields.description.content | default([]) %}
+      {% if bloco.type == 'paragraph' %}
+      {% set texto = bloco.content | default([])
+         | selectattr('type', 'equalto', 'text')
+         | map(attribute='text')
+         | join('')
+         | trim %}
+      {% if texto | upper == 'EXTERNO' %}
+      {% set estado.tipo = 'Externo' %}
+      {% elif texto | upper in ['INTERNO', 'INTERNOS'] %}
+      {% set estado.tipo = 'Interno' %}
+      {% elif texto is match('^[0-9]{2}/[0-9]{2}/[0-9]{4}$') %}
+      {% set estado.validade = texto %}
+      {% endif %}
+      {% elif bloco.type == 'bulletList' %}
+      {% for item in bloco.content | default([]) %}
+      {% for paragrafo in item.content | default([]) %}
+      {% if paragrafo.type == 'paragraph' %}
+      {% set host = (
+        paragrafo.content | default([])
+        | selectattr('type', 'equalto', 'text')
+        | map(attribute='text')
+        | join('')
+        | trim
+        | regex_replace('^\\*\\.', 'star.')
+      ) %}
+      {% if host and estado.validade %}
+      {% set resultado.certificados = resultado.certificados + [
+        {
+          'host': host,
+          'tipo': estado.tipo,
+          'validade': estado.validade
+        }
+      ] %}
+      {% endif %}
+      {% endif %}
+      {% endfor %}
+      {% endfor %}
+      {% endif %}
+      {% endfor %}
+      {% endfor %}
+      {{ resultado.certificados | to_yaml | from_yaml }}
+
+- name: Converter texto para lista
+  set_fact:
+    certificados_para_atualizar: "{{ certificados_para_atualizar | from_yaml }}"
+
+- name: Exibir certificados encontrados
+  ansible.builtin.debug:
+    msg:
+      host: "{{ item.host }}"
+      tipo: "{{ item.tipo }}"
+      validade: "{{ item.validade }}"
+  loop: "{{ certificados_para_atualizar }}"
+
+############################################################
+# ./roles/inventory/tasks/main.yml
+############################################################
+---
+# Cria em memória o host usado pelo connection plugin da
+# community.zabbix. Nada é executado no Zabbix aqui.
+#
+# Se zabbix_habilitado for false, esta role não faz nada e o
+# playbook segue normalmente (o Dynatrace nunca depende disso).
+
+- name: Avisar que o Zabbix está desabilitado
+  ansible.builtin.debug:
+    msg: >-
+      zabbix_habilitado=false: o host virtual não será criado e
+      a role "outage" vai pular as tasks do Zabbix.
+  when: not zabbix_habilitado
+
+- name: Validar configuração de acesso ao Zabbix
+  ansible.builtin.assert:
+    that:
+      - zabbix_host | length > 0
+      - zabbix_api_token | length > 0
+    fail_msg: >-
+      Configure zabbix_host e use o token
+      antes de executar o playbook (ou defina
+      zabbix_habilitado: false para pular o Zabbix).
+  when: zabbix_habilitado
+
+- name: Registrar host virtual para a API do Zabbix
+  ansible.builtin.add_host:
+    name: "{{ zabbix_inventory_host }}"
+    ansible_host: "{{ zabbix_host }}"
+    ansible_connection: httpapi
+    ansible_network_os: community.zabbix.zabbix
+    ansible_httpapi_port: "{{ zabbix_port }}"
+    ansible_httpapi_use_ssl: "{{ zabbix_use_ssl }}"
+    ansible_httpapi_validate_certs: "{{ zabbix_validate_certs }}"
+    ansible_zabbix_url_path: "{{ zabbix_url_path }}"
+    ansible_zabbix_auth_key: "{{ zabbix_api_token }}"
+  changed_when: false
+  when: zabbix_habilitado
+
+############################################################
+# ./roles/relatorios/tasks/main.yml
+############################################################
+---
+- name: Montar dados da planilha
+  ansible.builtin.set_fact:
+    outage_planilha: []
+
+- name: Adicionar ativos das GMUDs
+  ansible.builtin.set_fact:
+    outage_planilha: >-
+      {{
+        outage_planilha +
+        [{
+          'gml': item.0.chave,
+          'ativo': item.1,
+          'tipo': 'HOST',
+          'inicio': item.0.inicio,
+          'fim': item.0.fim
+        }]
+      }}
+  loop: "{{ gmuds_atualizadas | subelements('ativos') }}"
+
+- name: Adicionar SERVICES Dynatrace na planilha
+  ansible.builtin.set_fact:
+    outage_planilha: >-
+      {{
+        outage_planilha +
+        [{
+          'gml': item.0.gml,
+          'ativo': item.1,
+          'tipo': 'SERVICE',
+          'inicio': item.0.inicio,
+          'fim': item.0.fim
+        }]
+      }}
+  loop: "{{ dynatrace_relatorio | default([]) | subelements('entidades') }}"
+  when:
+    - item.1 is match('^SERVICE-')
+
+- name: Montar matriz Excel
+  ansible.builtin.set_fact:
+    excel_matrix: >-
+      {%- set matrix = [] -%}
+
+        {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 1, 'cell_value': 'GML'}) -%}
+        {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 2, 'cell_value': 'ATIVO'}) -%}
+        {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 3, 'cell_value': 'TIPO'}) -%}
+        {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 4, 'cell_value': 'INICIO'}) -%}
+        {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 5, 'cell_value': 'FIM'}) -%}
+
+      {%- for item in outage_planilha | default([]) -%}
+        {%- set row = loop.index + 1 -%}
+
+        {%- set _ = matrix.append({'cell_row': row, 'cell_col': 1, 'cell_value': item.gml}) -%}
+        {%- set _ = matrix.append({'cell_row': row, 'cell_col': 2, 'cell_value': item.ativo}) -%}
+        {%- set _ = matrix.append({'cell_row': row, 'cell_col': 3, 'cell_value': item.tipo}) -%}
+        {%- set _ = matrix.append({'cell_row': row, 'cell_col': 4, 'cell_value': item.inicio}) -%}
+        {%- set _ = matrix.append({'cell_row': row, 'cell_col': 5, 'cell_value': item.fim}) -%}
+      {%- endfor -%}
+
+      {{ matrix }}
+
+
+- name: Definir caminho da planilha
+  ansible.builtin.set_fact:
+    relatorio_excel: "/tmp/outages_gml.xlsx"
+
+- name: Criar planilha
+  ans2dev.general.open_xl:
+    op: n
+    dest: "{{ relatorio_excel }}"
+    sheet_name: "Outages"
+    updates_matrix: "{{ excel_matrix }}"
+
+- name: RELATORIO | Resumo da planilha
+  ansible.builtin.debug:
+    msg:
+      registros: "{{ outage_planilha | default([]) | length }}"
+      arquivo: "{{ relatorio_excel }}"
+# -------------------------------------------------------------------------
+# EMAIL | Enviar relatório de Outages
+# -------------------------------------------------------------------------
+- name: EMAIL | Enviar relatório de Outages
+  community.general.mail:
+    host: vip_smtp.claro.com.br
+    port: 25
+    from: coeeaiops@claro.com.br
+    to: "hassan.silva.terceiros@claro.com.br"
+    subject: >-
+      Relatorio Outages GMUD -
+      {{ ansible_date_time.date }}
+    subtype: plain
+    attach:
+      - "{{ relatorio_excel }}"
+    body: |
+      Prezado(a),
+
+      Segue em anexo o relatório de Outages criados pelo processo automático.
+
+      ================================================================
+      RESUMO
+      ================================================================
+
+      Data/Hora: {{ ansible_date_time.date }} {{ ansible_date_time.time }}
+
+      Total de GMUDs processadas:
+      {{ gmuds_atualizadas | length }}
+
+      Total de registros na planilha:
+      {{ outage_planilha | default([]) | length }}
+
+      ================================================================
+      GMUDS PROCESSADAS
+      ================================================================
+
+      {% for item in gmuds_atualizadas | default([]) %}
+      - {{ item.chave }}
+        Inicio: {{ item.inicio }}
+        Fim: {{ item.fim }}
+        Ativos: {{ item.ativos | length }}
+      {% endfor %}
+
+      ================================================================
+
+      A planilha em anexo contém:
+
+      - GML
+      - Ativo
+      - Início do Outage
+      - Fim do Outage
+
+      Caso uma GMUD possua múltiplos ativos,
+      haverá uma linha para cada ativo.
+
+      Este é um e-mail automático gerado pelo Ansible.
+
+  # when:
+  #   - email_destino is defined
+  #   - email_destino | length > 0
