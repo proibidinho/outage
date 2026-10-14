@@ -216,12 +216,19 @@
 #   Tipo de certificado: Interno
 #   Data de renovação: 06/10/2027
 #
-# Cada linha pode chegar como parágrafo separado ou como um único
-# parágrafo com quebras de linha (hardBreak no ADF); os dois casos
-# são tratados. O rótulo é reconhecido pelo começo (não depende de
-# acento). Um certificado por chamado; "*." no início do host vira
-# "star.", igual à atualização. Chamado sem host ou sem data válida
-# não gera certificado (e é avisado na task seguinte).
+# Um chamado pode ter VÁRIOS blocos desse tipo (um certificado por
+# bloco). Cada linha "Nome ...:" abre um novo certificado; o "Tipo de
+# certificado" e a "Data de renovação" seguintes pertencem a ele. O bloco
+# fecha quando começa o próximo "Nome" ou a descrição termina.
+#
+# As linhas podem chegar como parágrafos separados (Formato A) ou como um
+# único parágrafo com quebras de linha (hardBreak no ADF, Formato B, que
+# vem precedido de um parágrafo "Certificado Novo" e com o rótulo
+# "Nome dos certificados:"). Os dois são tratados. O rótulo de host é
+# qualquer um que comece com "Nome"; os demais rótulos são reconhecidos
+# pelo começo (não dependem de acento). "*." no início do host vira
+# "star.", igual à atualização. Bloco sem host ou sem data válida não gera
+# certificado (e o chamado sem nenhum certificado é avisado na task seguinte).
 # ------------------------------------------------------------
 - name: Extrair certificado dos chamados de criação
   ansible.builtin.set_fact:
@@ -241,6 +248,7 @@
       {%- endfor -%}
       {%- endif -%}
       {%- endfor -%}
+      {%- set pares = namespace(lista=[]) -%}
       {%- for bloco in pars.lista -%}
       {%- set t = namespace(texto='') -%}
       {%- for no in bloco.content | default([]) -%}
@@ -251,20 +259,27 @@
       {%- endif -%}
       {%- endfor -%}
       {%- for linha in t.texto.split('\n') if ':' in linha -%}
-      {%- set rotulo = linha.split(':', 1)[0] | trim | lower -%}
-      {%- set valor = linha.split(':', 1)[1] | trim -%}
-      {%- if rotulo.startswith('nome completo') -%}
-      {%- set cert.host = valor | regex_replace('^\\*\\.', 'star.') -%}
-      {%- elif rotulo.startswith('tipo de certificado') -%}
-      {%- set cert.tipo = 'Externo' if valor | upper == 'EXTERNO' else 'Interno' if valor | upper in ['INTERNO', 'INTERNOS'] else '' -%}
-      {%- elif rotulo.startswith('data de renova') and valor is match('^[0-9]{2}/[0-9]{2}/[0-9]{4}$') -%}
-      {%- set cert.validade = valor -%}
-      {%- endif -%}
+      {%- set pares.lista = pares.lista + [{'rotulo': linha.split(':', 1)[0] | trim | lower, 'valor': linha.split(':', 1)[1] | trim}] -%}
       {%- endfor -%}
       {%- endfor -%}
-      {%- if cert.host and cert.validade -%}
-      {%- set resultado.certificados = resultado.certificados + [{'ticket': ticket.key, 'operacao': 'CRIACAO', 'host': cert.host, 'tipo': cert.tipo, 'validade': cert.validade}] -%}
+      {#- par final "nome" vazio: força o fechamento do último bloco -#}
+      {%- set pares.lista = pares.lista + [{'rotulo': 'nome', 'valor': ''}] -%}
+      {%- for par in pares.lista -%}
+      {%- if par.rotulo.startswith('nome') -%}
+      {%- if cert.host -%}
+      {%- if cert.validade -%}
+      {%- set resultado.certificados = resultado.certificados + [{'ticket': ticket.key, 'operacao': 'CRIACAO', 'host': cert.host | regex_replace('^\\*\\.', 'star.'), 'tipo': cert.tipo, 'validade': cert.validade}] -%}
       {%- endif -%}
+      {%- set cert.tipo = '' -%}
+      {%- set cert.validade = '' -%}
+      {%- endif -%}
+      {%- set cert.host = par.valor -%}
+      {%- elif par.rotulo.startswith('tipo de certificado') -%}
+      {%- set cert.tipo = 'Externo' if par.valor | upper == 'EXTERNO' else 'Interno' if par.valor | upper in ['INTERNO', 'INTERNOS'] else '' -%}
+      {%- elif par.rotulo.startswith('data de renova') and par.valor is match('^[0-9]{2}/[0-9]{2}/[0-9]{4}$') -%}
+      {%- set cert.validade = par.valor -%}
+      {%- endif -%}
+      {%- endfor -%}
       {%- endfor -%}
       {{ resultado.certificados }}
 
