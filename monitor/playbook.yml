@@ -13,6 +13,7 @@
     jira_resumo_atualizacao: "Atualização de Alerta de Certificado - Zabbix"
     jira_resumo_criacao: "Criação de Alerta de Certificado - Zabbix"
 
+
     # ----------------------------------------------------------
     # Zabbix: host e padrão de chave dos itens de certificado.
     # Chave: zbx_valida_data_certificado["host","Tipo","DD/MM/AAAA"]
@@ -37,6 +38,13 @@
     # ----------------------------------------------------------
     zabbix_aplicar_alteracoes: "{{ aplicar_alteracoes | default(false) | bool }}"
 
+    # ----------------------------------------------------------
+    # Survey (opcional): número do chamado, ex.: PDST-123456.
+    # Em branco -> busca todos os chamados em aberto (comportamento
+    # de sempre). Preenchido -> processa SOMENTE esse chamado.
+    # ----------------------------------------------------------
+    jira_chamado: "{{ chamado | default('') | string | trim | upper }}"
+
   pre_tasks:
     # Falha antes de qualquer alteração no Zabbix, para não alterar
     # nada e só então descobrir que o relatório não tem destinatário.
@@ -49,6 +57,16 @@
         fail_msg: >-
           Informe a variável "email" na Survey do AAP com o endereço que
           receberá o relatório (ex.: usuario@empresa.com).
+        quiet: true
+
+    # Formato do chamado (evita montar uma JQL inválida ou com texto estranho).
+    - name: Validar o número do chamado (variável chamado da Survey, opcional)
+      ansible.builtin.assert:
+        that:
+          - jira_chamado | length == 0 or jira_chamado is match('^[A-Z][A-Z0-9_]*-[0-9]+$')
+        fail_msg: >-
+          O chamado informado ("{{ jira_chamado }}") não tem o formato esperado.
+          Use algo como PDST-123456, ou deixe em branco para buscar todos.
         quiet: true
 
     - name: Validar que o Zabbix está habilitado

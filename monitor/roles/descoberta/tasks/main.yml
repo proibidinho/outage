@@ -20,10 +20,14 @@
     body_format: json
     body:
       jql: >-
+        {% if jira_chamado | length > 0 %}
+        key = {{ jira_chamado }}
+        {% else %}
         project = {{ projeto_jira }}
         AND (summary ~ "\"{{ jira_resumo_atualizacao }}\""
         OR summary ~ "\"{{ jira_resumo_criacao }}\"")
         AND statusCategory != Done
+        {% endif %}
       maxResults: 1000
       fields:
         - summary
@@ -34,8 +38,10 @@
   environment: "{{ proxy_env }}"
 
 # ============================================================
-# 2. Manter somente chamados válidos (summary exatamente igual
-#    a um dos dois resumos)
+# 2. Manter somente chamados válidos. O resumo (summary) do chamado
+#    precisa CONTER o texto de jira_resumo_atualizacao ou de
+#    jira_resumo_criacao (comparação tolerante, explicada abaixo). Isso decide se o chamado é de
+#    atualização ou de criação.
 # ============================================================
 
 # ============================================================
@@ -51,16 +57,37 @@
 # ============================================================
 
 # CORREÇÃO: antes o filtro comparava com 'Atualização de alerta',
-# texto diferente do resumo usado na JQL, então nenhum chamado
-# passava. Agora o filtro usa as mesmas variáveis da JQL.
+# texto diferente do resumo usado na JQL. Agora o filtro usa as mesmas
+# variáveis da JQL. A comparação é tolerante a detalhes que não mudam o
+# sentido: maiúsculas/minúsculas, espaços repetidos ou "não separáveis" e
+# tipo de hífen/pontuação ("-", "–", "—"). Os dois textos são normalizados
+# (minúsculas, tudo que não é letra/número vira um único espaço) e o resumo
+# do chamado precisa conter o texto da variável. "Atualização de alerta"
+# (resumo antigo, sem "de Certificado - Zabbix") NÃO casa.
 - name: Selecionar tickets de atualização e de criação de alerta
   ansible.builtin.set_fact:
-    tickets_certificados: >-
-      {{
-        jira_search.json.issues
-        | selectattr('fields.summary', 'in', [jira_resumo_atualizacao, jira_resumo_criacao])
-        | list
-      }}
+    tickets_atualizacao: >-
+      {%- set alvo = jira_resumo_atualizacao | lower | regex_replace('[\\W_]+', ' ') | trim -%}
+      {%- set r = namespace(lista=[]) -%}
+      {%- for t in jira_search.json.issues -%}
+      {%- if alvo in (t.fields.summary | default('') | lower | regex_replace('[\\W_]+', ' ') | trim) -%}
+      {%- set r.lista = r.lista + [t] -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ r.lista }}
+    tickets_criacao: >-
+      {%- set alvo = jira_resumo_criacao | lower | regex_replace('[\\W_]+', ' ') | trim -%}
+      {%- set r = namespace(lista=[]) -%}
+      {%- for t in jira_search.json.issues -%}
+      {%- if alvo in (t.fields.summary | default('') | lower | regex_replace('[\\W_]+', ' ') | trim) -%}
+      {%- set r.lista = r.lista + [t] -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ r.lista }}
+
+- name: Juntar os tickets selecionados
+  ansible.builtin.set_fact:
+    tickets_certificados: "{{ tickets_atualizacao + tickets_criacao }}"
 
 # A JQL aproximada pode trazer chamados parecidos; avisa quais foram ignorados.
 - name: Avisar sobre chamados retornados pela busca e ignorados
@@ -69,11 +96,21 @@
   loop: >-
     {{
       jira_search.json.issues
-      | rejectattr('fields.summary', 'in', [jira_resumo_atualizacao, jira_resumo_criacao])
+      | rejectattr('key', 'in', tickets_certificados | map(attribute='key') | list)
       | list
     }}
   loop_control:
     label: "{{ item.key }}"
+
+# Se a Survey informou o chamado e ele não foi aproveitado, diz o motivo provável.
+- name: Avisar quando o chamado informado na Survey não foi aproveitado
+  ansible.builtin.debug:
+    msg: >-
+      O chamado {{ jira_chamado }} não foi encontrado ou o resumo dele não contém
+      "{{ jira_resumo_atualizacao }}" nem "{{ jira_resumo_criacao }}".
+  when:
+    - jira_chamado | length > 0
+    - tickets_certificados | length == 0
 
 # ============================================================
 # 3. Mostrar resultado
@@ -122,7 +159,7 @@
       {% set resultado = namespace(certificados=[]) %}
       {% for ticket in tickets_certificados | default([]) %}
       {% set estado = namespace(validade='', tipo='') %}
-      {% set operacao = 'CRIACAO' if ticket.fields.summary == jira_resumo_criacao else 'ATUALIZACAO' %}
+      {% set operacao = 'CRIACAO' if ticket.key in (tickets_criacao | map(attribute='key') | list) else 'ATUALIZACAO' %}
       {% for bloco in ticket.fields.description.content | default([]) %}
       {% if bloco.type == 'paragraph' %}
       {% set texto = bloco.content | default([])
@@ -190,7 +227,7 @@
   ansible.builtin.set_fact:
     certificados_criacao_jira: >-
       {%- set resultado = namespace(certificados=[]) -%}
-      {%- for ticket in tickets_certificados | default([]) | selectattr('fields.summary', 'equalto', jira_resumo_criacao) -%}
+      {%- for ticket in tickets_criacao | default([]) -%}
       {%- set cert = namespace(host='', tipo='', validade='') -%}
       {%- set pars = namespace(lista=[]) -%}
       {%- for bloco in ticket.fields.description.content | default([]) -%}
@@ -236,8 +273,7 @@
     msg: "Chamado {{ item.key }} ignorado: não foi possível ler host e data de renovação válidos da descrição."
   loop: >-
     {{
-      tickets_certificados
-      | selectattr('fields.summary', 'equalto', jira_resumo_criacao)
+      tickets_criacao
       | rejectattr('key', 'in', (certificados_jira + certificados_criacao_jira) | map(attribute='ticket') | list)
       | list
     }}
