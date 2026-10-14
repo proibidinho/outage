@@ -1,6 +1,6 @@
 
 ############################################################
-# ./playbook.yml
+# ./backup/playbook.yml
 ############################################################
 ---
 - name: Atualiza certificados no Zabbix baseado em chamado de GA
@@ -23,7 +23,7 @@
     # - role: relatorios
 
 ############################################################
-# ./roles/atualiza/tasks/main.yml
+# ./backup/roles/atualiza/tasks/main.yml
 ############################################################
 ---
 # ============================================================
@@ -49,7 +49,7 @@
   when: certificados_para_atualizar | default([]) | length > 0
 
 ############################################################
-# ./roles/atualiza/tasks/zabbix.yml
+# ./backup/roles/atualiza/tasks/zabbix.yml
 ############################################################
 ---
 # ============================================================
@@ -162,7 +162,7 @@
 #   loop: "{{ zbx_item.json.result | default([]) }}"
 
 ############################################################
-# ./roles/atualiza/vars/main.yml
+# ./backup/roles/atualiza/vars/main.yml
 ############################################################
 ---
 # gmuds:
@@ -182,7 +182,7 @@
 #       - "901269"
 
 ############################################################
-# ./roles/cria/tasks/main.yml
+# ./backup/roles/cria/tasks/main.yml
 ############################################################
 ---
 # ============================================================
@@ -208,7 +208,7 @@
   when: certificados_para_atualizar | default([]) | length > 0
 
 ############################################################
-# ./roles/cria/tasks/zabbix.yml
+# ./backup/roles/cria/tasks/zabbix.yml
 ############################################################
 ---
 # ============================================================
@@ -321,7 +321,7 @@
 #   loop: "{{ zbx_item.json.result | default([]) }}"
 
 ############################################################
-# ./roles/cria/vars/main.yml
+# ./backup/roles/cria/vars/main.yml
 ############################################################
 ---
 # gmuds:
@@ -341,7 +341,7 @@
 #       - "901269"
 
 ############################################################
-# ./roles/descoberta/tasks/main.yml
+# ./backup/roles/descoberta/tasks/main.yml
 ############################################################
 # ============================================================
 # 1. Buscar chamados candidatos
@@ -484,7 +484,7 @@
   loop: "{{ certificados_para_atualizar }}"
 
 ############################################################
-# ./roles/inventory/tasks/main.yml
+# ./backup/roles/inventory/tasks/main.yml
 ############################################################
 ---
 # Cria em memória o host usado pelo connection plugin da
@@ -526,7 +526,7 @@
   when: zabbix_habilitado
 
 ############################################################
-# ./roles/relatorios/tasks/main.yml
+# ./backup/roles/relatorios/tasks/main.yml
 ############################################################
 ---
 - name: Montar dados da planilha
@@ -666,18 +666,963 @@
   #   - email_destino is defined
   #   - email_destino | length > 0
 
+############################################################
+# ./playbook.yml
+############################################################
+---
+- name: Atualiza e cria alertas de certificado no Zabbix baseado em chamados de GA
+  hosts: localhost
+  gather_facts: true
+  environment:
+    TZ: "America/Sao_Paulo"
 
-#Exemplo de output atual 
-certificados_para_atualizar:
+  vars:
+    # ----------------------------------------------------------
+    # Resumos (summary) que diferenciam os dois tipos de chamado.
+    # Usados na JQL e no filtro local da role descoberta.
+    # ----------------------------------------------------------
+    #jira_resumo_atualizacao: "Atualização de Alerta de Certificado - Zabbix"
+    jira_resumo_atualizacao: "Atualização de alerta"
+    jira_resumo_criacao: "Criação de Alerta de Certificado - Zabbix"
 
-  - host: acesso.claro.com.br
-    tipo: Externo
-    validade: 19/04/2027
+    # ----------------------------------------------------------
+    # Zabbix: host e padrão de chave dos itens de certificado.
+    # Chave: zbx_valida_data_certificado["host","Tipo","DD/MM/AAAA"]
+    #
+    # zabbix_chave_regex  -> extrai (host, tipo, data) de uma chave.
+    # zabbix_data_regex   -> localiza somente a data dentro da chave.
+    # (regex em aspas simples do YAML: a barra invertida é literal)
+    # ----------------------------------------------------------
+    zabbix_host_certificados: "CERTIFICADOS_CLARO_BRASIL"
+    zabbix_chave_certificado: "zbx_valida_data_certificado"
+    zabbix_chave_regex: '^zbx_valida_data_certificado\[\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,\s*"([0-9]{2}/[0-9]{2}/[0-9]{4})"\s*\]$'
+    zabbix_data_regex: '[0-9]{2}/[0-9]{2}/[0-9]{4}(?="\s*\]$)'
 
-  - host: poc-waf.claro.com.br
-    tipo: Interno
-    validade: 01/10/2026
+    # URL da API (antes montada com set_fact dentro das roles).
+    zabbix_api_url: >-
+      {{ 'https' if zabbix_use_ssl | bool else 'http' }}://{{ zabbix_host }}{{ (':' ~ zabbix_port) if zabbix_port | int not in [80, 443] else '' }}{{ ('/' ~ zabbix_url_path) if zabbix_url_path | length > 0 else '' }}/api_jsonrpc.php
 
-  - host: star.primesys.com.br
-    tipo: Externo
-    validade: 15/04/2027
+    # ----------------------------------------------------------
+    # Segurança: por padrão NADA é gravado no Zabbix (simulação).
+    # Para gravar de verdade, informe aplicar_alteracoes: true
+    # (Survey do AAP ou extra vars).
+    # ----------------------------------------------------------
+    zabbix_aplicar_alteracoes: "{{ aplicar_alteracoes | default(false) | bool }}"
+
+  pre_tasks:
+    # Falha antes de qualquer alteração no Zabbix, para não alterar
+    # nada e só então descobrir que o relatório não tem destinatário.
+    - name: Validar o destinatário do relatório (variável email da Survey)
+      ansible.builtin.assert:
+        that:
+          - email is defined
+          - email | string | trim | length > 0
+          - "'@' in (email | string)"
+        fail_msg: >-
+          Informe a variável "email" na Survey do AAP com o endereço que
+          receberá o relatório (ex.: usuario@empresa.com).
+        quiet: true
+
+    - name: Validar que o Zabbix está habilitado
+      ansible.builtin.assert:
+        that:
+          - zabbix_habilitado | default(true) | bool
+        fail_msg: >-
+          Este playbook só trabalha com o Zabbix; zabbix_habilitado
+          não pode ser false.
+        quiet: true
+
+  roles:
+    # Cria o host virtual usado pelas tasks do Zabbix
+    - role: inventory
+
+    # Procura os chamados no Jira e separa em:
+    #   certificados_para_atualizar / certificados_para_criar
+    - role: descoberta
+
+    # Altera a validade (chave) de itens já cadastrados
+    - role: atualiza
+      when: certificados_para_atualizar | length > 0
+
+    # Cadastra itens novos
+    - role: cria
+      when: certificados_para_criar | length > 0
+
+    # Gera o CSV e envia para o e-mail informado na Survey
+    # (tasks/certificados.yml; o fluxo de GMUDs em tasks/main.yml
+    # não é tocado).
+    - role: relatorios
+      tasks_from: certificados
+
+
+############################################################
+# ./roles/atualiza/tasks/main.yml
+############################################################
+---
+# ============================================================
+# Role atualiza: altera a validade (data dentro da key) de itens
+# JÁ cadastrados no host CERTIFICADOS_CLARO_BRASIL.
+#
+# Entrada (role descoberta):
+#   certificados_para_atualizar:
+#     - ticket: GA-123
+#       operacao: ATUALIZACAO
+#       host: netsmsmfa.claro.com.br
+#       tipo: Externo
+#       validade: "30/03/2027"
+#
+# Saída (consumida pela role relatorios):
+#   resultado_atualizacao: uma linha por certificado, com
+#   operacao, ticket, host, tipo, itemid, validade_anterior,
+#   validade_solicitada, status e mensagem.
+#
+# Status possíveis:
+#   ATUALIZADO      API confirmou a alteração
+#   SIMULADO        aplicar_alteracoes = false (nada foi gravado)
+#   JA_ATUALIZADO   o item já está com a validade pedida
+#   NAO_ENCONTRADO  nenhum item para host + tipo
+#   AMBIGUO         mais de um item para host + tipo (não altera)
+#   CONFLITO        chamados pedem validades diferentes para o
+#                   mesmo certificado (não altera)
+#   TIPO_INVALIDO   descrição do chamado sem Externo/Interno
+#   ERRO            a API retornou erro ou não respondeu
+#
+# Fluxo: 1 consulta em lote -> plano por certificado (sem
+# escrita) -> item.update só dos PENDENTES -> resultado final.
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Buscar de uma vez todos os itens de certificado do host
+#    (uma chamada em vez de uma por certificado).
+#    JSON-RPC devolve HTTP 200 mesmo com erro: valida "error".
+# ------------------------------------------------------------
+- name: Buscar itens de certificado no Zabbix
+  ansible.builtin.uri:
+    url: "{{ zabbix_api_url }}"
+    method: POST
+    body_format: json
+    headers:
+      Content-Type: application/json-rpc
+    body:
+      jsonrpc: "2.0"
+      method: "item.get"
+      params:
+        host: "{{ zabbix_host_certificados }}"
+        search:
+          key_: "{{ zabbix_chave_certificado }}"
+        output:
+          - itemid
+          - name
+          - key_
+      auth: "{{ zabbix_api_token }}"
+      id: 1
+    validate_certs: "{{ zabbix_validate_certs }}"
+  delegate_to: localhost
+  register: zbx_itens
+  failed_when: >-
+    zbx_itens.json is not defined
+    or zbx_itens.json.error is defined
+    or zbx_itens.json.result is not defined
+
+# ------------------------------------------------------------
+# 2. Separar host / tipo / data de cada key existente.
+#    Só entram itens cuja key segue o padrão
+#    zbx_valida_data_certificado["host","Tipo","DD/MM/AAAA"].
+#    host e tipo ficam em minúsculas para comparação.
+# ------------------------------------------------------------
+- name: Interpretar a key dos itens existentes
+  ansible.builtin.set_fact:
+    zbx_certs: >-
+      {%- set r = namespace(lista=[]) -%}
+      {%- for i in zbx_itens.json.result -%}
+      {%- set p = i.key_ | regex_findall(zabbix_chave_regex) -%}
+      {%- if p -%}
+      {%- set r.lista = r.lista + [{'itemid': i.itemid, 'name': i.name, 'key_': i.key_, 'host': p[0][0] | lower, 'tipo': p[0][1] | lower, 'data': p[0][2]}] -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ r.lista }}
+
+# ------------------------------------------------------------
+# 3. Planejar: decide o que fazer com cada certificado, SEM
+#    alterar nada. A ordem do "status" abaixo é a ordem de
+#    prioridade das regras. O debug serve só para registrar uma
+#    linha por certificado (resultado em zbx_plano_loop).
+# ------------------------------------------------------------
+- name: Planejar atualizações (somente leitura)
+  ansible.builtin.debug:
+    msg:
+      operacao: "ATUALIZACAO"
+      ticket: "{{ item.ticket }}"
+      host: "{{ item.host }}"
+      tipo: "{{ item.tipo }}"
+      itemid: "{{ encontrados[0].itemid if encontrados | length == 1 else '' }}"
+      validade_anterior: "{{ encontrados[0].data if encontrados | length == 1 else '' }}"
+      validade_solicitada: "{{ item.validade }}"
+      status: "{{ status }}"
+      mensagem: "{{ mensagem }}"
+      nova_chave: "{{ nova_chave }}"
+  vars:
+    # itens do Zabbix com o mesmo host + tipo (comparação exata na key)
+    encontrados: >-
+      {{ zbx_certs
+         | selectattr('host', 'equalto', item.host | lower)
+         | selectattr('tipo', 'equalto', item.tipo | lower)
+         | list }}
+    # validades diferentes pedidas para o mesmo host + tipo (todos os chamados)
+    datas_pedidas: >-
+      {{ certificados_para_atualizar
+         | selectattr('host', 'equalto', item.host)
+         | selectattr('tipo', 'equalto', item.tipo)
+         | map(attribute='validade')
+         | unique
+         | list }}
+    status: >-
+      {{ 'TIPO_INVALIDO' if (item.tipo | lower) not in ['externo', 'interno']
+         else 'CONFLITO' if datas_pedidas | length > 1
+         else 'NAO_ENCONTRADO' if encontrados | length == 0
+         else 'AMBIGUO' if encontrados | length > 1
+         else 'JA_ATUALIZADO' if encontrados[0].data == item.validade
+         else 'PENDENTE' }}
+    mensagem: >-
+      {{ 'Tipo não identificado na descrição do chamado (esperado Externo ou Interno).' if status == 'TIPO_INVALIDO'
+         else 'Chamados pedem validades diferentes para o mesmo certificado (' ~ (datas_pedidas | join(', ')) ~ '). Nada foi alterado.' if status == 'CONFLITO'
+         else 'Nenhum item encontrado no Zabbix para este host e tipo. Para cadastrar, use um chamado de criação.' if status == 'NAO_ENCONTRADO'
+         else 'Mais de um item corresponde (itemids: ' ~ (encontrados | map(attribute='itemid') | join(', ')) ~ '). Nada foi alterado.' if status == 'AMBIGUO'
+         else 'O item já está com a validade solicitada.' if status == 'JA_ATUALIZADO'
+         else 'Aguardando atualização.' }}
+    # só substitui a data; o restante da key é mantido como está
+    nova_chave: >-
+      {{ encontrados[0].key_ | regex_replace(zabbix_data_regex, item.validade) if status == 'PENDENTE' else '' }}
+  loop: "{{ certificados_para_atualizar }}"
+  loop_control:
+    label: "{{ item.host }} ({{ item.tipo }})"
+  register: zbx_plano_loop
+
+- name: Guardar o plano
+  ansible.builtin.set_fact:
+    zbx_plano: "{{ zbx_plano_loop.results | map(attribute='msg') | list }}"
+
+# ------------------------------------------------------------
+# 4. Atualizar. Só vai para a API o que ficou PENDENTE e somente
+#    com aplicar_alteracoes = true. Enviamos apenas itemid + key_,
+#    então os demais atributos do item não são tocados.
+#    failed_when: false -> um erro não interrompe os outros itens;
+#    o resultado real de cada chamada é avaliado no passo 5.
+# ------------------------------------------------------------
+- name: Atualizar a key dos itens no Zabbix
+  ansible.builtin.uri:
+    url: "{{ zabbix_api_url }}"
+    method: POST
+    body_format: json
+    headers:
+      Content-Type: application/json-rpc
+    body:
+      jsonrpc: "2.0"
+      method: "item.update"
+      params:
+        itemid: "{{ item.itemid }}"
+        key_: "{{ item.nova_chave }}"
+      auth: "{{ zabbix_api_token }}"
+      id: 1
+    validate_certs: "{{ zabbix_validate_certs }}"
+  delegate_to: localhost
+  loop: "{{ zbx_plano }}"
+  loop_control:
+    label: "{{ item.host }} ({{ item.tipo }})"
+  when: item.status == 'PENDENTE' and zabbix_aplicar_alteracoes | bool
+  register: zbx_update
+  failed_when: false
+
+# ------------------------------------------------------------
+# 5. Resultado final. Sucesso = HTTP 200 + sem "error" no JSON-RPC
+#    + itemid confirmado em result.itemids. Qualquer outra coisa
+#    vira ERRO com a mensagem da API (ou do transporte).
+# ------------------------------------------------------------
+- name: Consolidar resultado da atualização
+  ansible.builtin.debug:
+    msg:
+      operacao: "{{ linha.operacao }}"
+      ticket: "{{ linha.ticket }}"
+      host: "{{ linha.host }}"
+      tipo: "{{ linha.tipo }}"
+      itemid: "{{ linha.itemid }}"
+      validade_anterior: "{{ linha.validade_anterior }}"
+      validade_solicitada: "{{ linha.validade_solicitada }}"
+      status: "{{ status }}"
+      mensagem: "{{ mensagem }}"
+  vars:
+    linha: "{{ item.0 }}"
+    resp: "{{ item.1 }}"
+    api_ok: >-
+      {{ resp.json is defined
+         and resp.json.error is not defined
+         and linha.itemid in (resp.json.result.itemids | default([])) }}
+    api_erro: >-
+      {{ (resp.json.error.message ~ ' - ' ~ (resp.json.error.data | default('')))
+         if resp.json is defined and resp.json.error is defined
+         else (resp.msg | default('Sem resposta válida da API.')) }}
+    status: >-
+      {{ linha.status if linha.status != 'PENDENTE'
+         else 'SIMULADO' if resp.skipped | default(false)
+         else 'ATUALIZADO' if api_ok
+         else 'ERRO' }}
+    mensagem: >-
+      {{ linha.mensagem if linha.status != 'PENDENTE'
+         else 'Simulação (aplicar_alteracoes=false): a key passaria para ' ~ linha.nova_chave if status == 'SIMULADO'
+         else 'Validade alterada de ' ~ linha.validade_anterior ~ ' para ' ~ linha.validade_solicitada ~ '.' if status == 'ATUALIZADO'
+         else api_erro }}
+  loop: "{{ zbx_plano | zip(zbx_update.results) | list }}"
+  loop_control:
+    label: "{{ item.0.host }} ({{ item.0.tipo }})"
+  register: zbx_resultado_loop
+
+- name: Guardar o resultado para o relatório
+  ansible.builtin.set_fact:
+    resultado_atualizacao: "{{ zbx_resultado_loop.results | map(attribute='msg') | list }}"
+
+
+############################################################
+# ./roles/cria/tasks/main.yml
+############################################################
+---
+# ============================================================
+# Role cria: cadastra itens NOVOS de certificado no host
+# CERTIFICADOS_CLARO_BRASIL, sem duplicar os que já existem.
+#
+# Entrada (role descoberta):
+#   certificados_para_criar:
+#     - ticket: GA-456
+#       operacao: CRIACAO
+#       host: novo.claro.com.br
+#       tipo: Externo
+#       validade: "20/08/2027"
+#
+# Saída (consumida pela role relatorios):
+#   resultado_criacao (mesmas colunas de resultado_atualizacao).
+#
+# Status possíveis:
+#   CRIADO         API confirmou a criação (itemid novo na linha)
+#   SIMULADO       aplicar_alteracoes = false (nada foi gravado)
+#   JA_EXISTE      já há item para host + tipo (não cria; para mudar
+#                  a data use chamado de atualização)
+#   SEM_MODELO     não há item-modelo do mesmo tipo no host, ou o nome
+#                  dele não permite derivar o nome do novo item
+#   CONFLITO       chamados pedem validades diferentes para o mesmo
+#                  certificado (não cria)
+#   TIPO_INVALIDO  descrição do chamado sem Externo/Interno
+#   ERRO           a API retornou erro ou não respondeu
+#
+# Como o item novo é montado (nada é inventado):
+#   - key_  : a key do item-modelo, trocando host e data;
+#   - name  : o nome do item-modelo, trocando host e data;
+#   - hostid: obtido por host.get do host de certificados;
+#   - demais atributos: copiados do item-modelo (cria_campos_modelo).
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. hostid do host de certificados (necessário no item.create).
+# ------------------------------------------------------------
+- name: Buscar o hostid do host de certificados
+  ansible.builtin.uri:
+    url: "{{ zabbix_api_url }}"
+    method: POST
+    body_format: json
+    headers:
+      Content-Type: application/json-rpc
+    body:
+      jsonrpc: "2.0"
+      method: "host.get"
+      params:
+        filter:
+          host:
+            - "{{ zabbix_host_certificados }}"
+        output:
+          - hostid
+          - host
+      auth: "{{ zabbix_api_token }}"
+      id: 1
+    validate_certs: "{{ zabbix_validate_certs }}"
+  delegate_to: localhost
+  register: zbx_host
+  failed_when: >-
+    zbx_host.json is not defined
+    or zbx_host.json.error is defined
+    or zbx_host.json.result is not defined
+    or zbx_host.json.result | length != 1
+
+- name: Guardar o hostid
+  ansible.builtin.set_fact:
+    zbx_hostid: "{{ zbx_host.json.result[0].hostid }}"
+
+# ------------------------------------------------------------
+# 2. Itens de certificado já existentes, com TODOS os atributos
+#    (output extend), tags e pré-processamento: servem para
+#    detectar duplicatas e como modelo.
+# ------------------------------------------------------------
+- name: Buscar itens de certificado no Zabbix
+  ansible.builtin.uri:
+    url: "{{ zabbix_api_url }}"
+    method: POST
+    body_format: json
+    headers:
+      Content-Type: application/json-rpc
+    body:
+      jsonrpc: "2.0"
+      method: "item.get"
+      params:
+        hostids: "{{ zbx_hostid }}"
+        search:
+          key_: "{{ zabbix_chave_certificado }}"
+        output: "extend"
+        selectTags: "extend"
+        selectPreprocessing: "extend"
+        sortfield: "itemid"
+      auth: "{{ zabbix_api_token }}"
+      id: 1
+    validate_certs: "{{ zabbix_validate_certs }}"
+  delegate_to: localhost
+  register: zbx_itens
+  failed_when: >-
+    zbx_itens.json is not defined
+    or zbx_itens.json.error is defined
+    or zbx_itens.json.result is not defined
+
+# host_orig guarda o host exatamente como está na key (com maiúsculas
+# e minúsculas), usado para trocar o host no nome e na key do modelo.
+- name: Interpretar a key dos itens existentes
+  ansible.builtin.set_fact:
+    zbx_certs: >-
+      {%- set r = namespace(lista=[]) -%}
+      {%- for i in zbx_itens.json.result -%}
+      {%- set p = i.key_ | regex_findall(zabbix_chave_regex) -%}
+      {%- if p -%}
+      {%- set r.lista = r.lista + [{'itemid': i.itemid, 'name': i.name, 'key_': i.key_, 'host': p[0][0] | lower, 'host_orig': p[0][0], 'tipo': p[0][1] | lower, 'data': p[0][2], 'item': i}] -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ r.lista }}
+
+# ------------------------------------------------------------
+# 3. Planejar: decide o que fazer com cada certificado, SEM
+#    criar nada. Ordem do "status" = prioridade das regras.
+#    O payload mostrado é exatamente o que iria no item.create.
+# ------------------------------------------------------------
+- name: Planejar criações (somente leitura)
+  ansible.builtin.debug:
+    msg:
+      operacao: "CRIACAO"
+      ticket: "{{ item.ticket }}"
+      host: "{{ item.host }}"
+      tipo: "{{ item.tipo }}"
+      itemid: "{{ existentes[0].itemid if existentes | length > 0 else '' }}"
+      validade_anterior: "{{ existentes[0].data if existentes | length > 0 else '' }}"
+      validade_solicitada: "{{ item.validade }}"
+      status: "{{ status }}"
+      mensagem: "{{ mensagem }}"
+      payload: "{{ payload }}"
+  vars:
+    # itens que já existem para o mesmo host + tipo (qualquer data)
+    existentes: >-
+      {{ zbx_certs
+         | selectattr('host', 'equalto', item.host | lower)
+         | selectattr('tipo', 'equalto', item.tipo | lower)
+         | list }}
+    # item-modelo: primeiro item (menor itemid) do mesmo tipo
+    modelo: >-
+      {{ zbx_certs
+         | selectattr('tipo', 'equalto', item.tipo | lower)
+         | first
+         | default({}) }}
+    # o nome do modelo precisa conter o host para podermos trocá-lo
+    modelo_ok: "{{ modelo | length > 0 and modelo.host_orig in modelo.item.name }}"
+    datas_pedidas: >-
+      {{ certificados_para_criar
+         | selectattr('host', 'equalto', item.host)
+         | selectattr('tipo', 'equalto', item.tipo)
+         | map(attribute='validade')
+         | unique
+         | list }}
+    status: >-
+      {{ 'TIPO_INVALIDO' if (item.tipo | lower) not in ['externo', 'interno']
+         else 'CONFLITO' if datas_pedidas | length > 1
+         else 'JA_EXISTE' if existentes | length > 0
+         else 'SEM_MODELO' if not modelo_ok
+         else 'PENDENTE' }}
+    mensagem: >-
+      {{ 'Tipo não identificado na descrição do chamado (esperado Externo ou Interno).' if status == 'TIPO_INVALIDO'
+         else 'Chamados pedem validades diferentes para o mesmo certificado (' ~ (datas_pedidas | join(', ')) ~ '). Nada foi criado.' if status == 'CONFLITO'
+         else 'Já existe item para este host e tipo (itemid ' ~ existentes[0].itemid ~ ', validade ' ~ existentes[0].data ~ '). Nada foi criado; para mudar a data use um chamado de atualização.' if status == 'JA_EXISTE'
+         else 'Sem item-modelo do tipo ' ~ item.tipo ~ ' no host, ou o nome do modelo não contém o host. Nada foi criado.' if status == 'SEM_MODELO'
+         else 'Aguardando criação.' }}
+    nome: >-
+      {{ modelo.item.name | replace(modelo.host_orig, item.host) | replace(modelo.data, item.validade) if status == 'PENDENTE' else '' }}
+    # key do modelo com o host e a data trocados (mantém o formato da key)
+    chave: >-
+      {{ modelo.key_ | replace('"' ~ modelo.host_orig ~ '"', '"' ~ item.host ~ '"') | regex_replace(zabbix_data_regex, item.validade) if status == 'PENDENTE' else '' }}
+    # atributos do modelo (somente os de cria_campos_modelo, e só se preenchidos)
+    campos_modelo: >-
+      {{ modelo.item | dict2items
+         | selectattr('key', 'in', cria_campos_modelo)
+         | rejectattr('value', 'in', ['', []])
+         | items2dict }}
+    payload: >-
+      {{ {'hostid': zbx_hostid, 'name': nome, 'key_': chave} | combine(campos_modelo) if status == 'PENDENTE' else {} }}
+  loop: "{{ certificados_para_criar }}"
+  loop_control:
+    label: "{{ item.host }} ({{ item.tipo }})"
+  register: zbx_plano_loop
+
+- name: Guardar o plano
+  ansible.builtin.set_fact:
+    zbx_plano: "{{ zbx_plano_loop.results | map(attribute='msg') | list }}"
+
+# ------------------------------------------------------------
+# 4. Criar. Só vai para a API o que ficou PENDENTE e somente com
+#    aplicar_alteracoes = true. failed_when: false -> um erro não
+#    interrompe os demais; o resultado real é avaliado no passo 5.
+# ------------------------------------------------------------
+- name: Criar os itens no Zabbix
+  ansible.builtin.uri:
+    url: "{{ zabbix_api_url }}"
+    method: POST
+    body_format: json
+    headers:
+      Content-Type: application/json-rpc
+    body:
+      jsonrpc: "2.0"
+      method: "item.create"
+      params: "{{ item.payload }}"
+      auth: "{{ zabbix_api_token }}"
+      id: 1
+    validate_certs: "{{ zabbix_validate_certs }}"
+  delegate_to: localhost
+  loop: "{{ zbx_plano }}"
+  loop_control:
+    label: "{{ item.host }} ({{ item.tipo }})"
+  when: item.status == 'PENDENTE' and zabbix_aplicar_alteracoes | bool
+  register: zbx_create
+  failed_when: false
+
+# ------------------------------------------------------------
+# 5. Resultado final. Sucesso = HTTP 200 + sem "error" no JSON-RPC
+#    + um itemid em result.itemids. Qualquer outra coisa vira ERRO
+#    com a mensagem da API (ou do transporte).
+# ------------------------------------------------------------
+- name: Consolidar resultado da criação
+  ansible.builtin.debug:
+    msg:
+      operacao: "{{ linha.operacao }}"
+      ticket: "{{ linha.ticket }}"
+      host: "{{ linha.host }}"
+      tipo: "{{ linha.tipo }}"
+      itemid: "{{ novo_itemid if status == 'CRIADO' else linha.itemid }}"
+      validade_anterior: "{{ linha.validade_anterior }}"
+      validade_solicitada: "{{ linha.validade_solicitada }}"
+      status: "{{ status }}"
+      mensagem: "{{ mensagem }}"
+  vars:
+    linha: "{{ item.0 }}"
+    resp: "{{ item.1 }}"
+    novo_itemid: "{{ resp.json.result.itemids[0] | default('') if resp.json is defined and resp.json.error is not defined else '' }}"
+    api_ok: >-
+      {{ resp.json is defined
+         and resp.json.error is not defined
+         and resp.json.result.itemids | default([]) | length == 1 }}
+    api_erro: >-
+      {{ (resp.json.error.message ~ ' - ' ~ (resp.json.error.data | default('')))
+         if resp.json is defined and resp.json.error is defined
+         else (resp.msg | default('Sem resposta válida da API.')) }}
+    status: >-
+      {{ linha.status if linha.status != 'PENDENTE'
+         else 'SIMULADO' if resp.skipped | default(false)
+         else 'CRIADO' if api_ok
+         else 'ERRO' }}
+    mensagem: >-
+      {{ linha.mensagem if linha.status != 'PENDENTE'
+         else 'Simulação (aplicar_alteracoes=false): seria criado o item "' ~ linha.payload.name ~ '" com a key ' ~ linha.payload.key_ if status == 'SIMULADO'
+         else 'Item criado: ' ~ linha.payload.key_ if status == 'CRIADO'
+         else api_erro }}
+  loop: "{{ zbx_plano | zip(zbx_create.results) | list }}"
+  loop_control:
+    label: "{{ item.0.host }} ({{ item.0.tipo }})"
+  register: zbx_resultado_loop
+
+- name: Guardar o resultado para o relatório
+  ansible.builtin.set_fact:
+    resultado_criacao: "{{ zbx_resultado_loop.results | map(attribute='msg') | list }}"
+
+
+############################################################
+# ./roles/cria/vars/main.yml
+############################################################
+---
+# ============================================================
+# Atributos copiados do item-modelo ao criar um item novo.
+#
+# O item-modelo é um item já existente no host de certificados com
+# o mesmo tipo (Externo/Interno) do certificado a criar. Só os
+# campos abaixo, e só quando preenchidos no modelo, vão no
+# item.create. hostid, name e key_ são sempre montados pela role.
+#
+# Se o tipo de item usado em produção exigir outros campos (ex.:
+# params, timeout, trapper_hosts, snmp_oid, url...), acrescente-os
+# aqui conforme a documentação da versão do Zabbix. Antes de
+# executar com aplicar_alteracoes=true, confira o "payload" que a
+# simulação mostra para cada certificado.
+# ============================================================
+cria_campos_modelo:
+  - type
+  - value_type
+  - interfaceid
+  - delay
+  - history
+  - trends
+  - units
+  - description
+  - status
+  - tags
+  - preprocessing
+
+
+############################################################
+# ./roles/descoberta/tasks/main.yml
+############################################################
+# ============================================================
+# 1. Buscar chamados candidatos
+#
+# A JQL usa "~" (busca de texto, aproximada). Por isso ela só
+# traz candidatos; o filtro exato por summary é feito no passo 2.
+# Os dois resumos vêm do playbook (jira_resumo_atualizacao e
+# jira_resumo_criacao), para JQL e filtro local nunca divergirem.
+# ============================================================
+
+- name: Buscar chamados de atualização e de criação de alerta
+  ansible.builtin.uri:
+    url: "{{ jira_base_url }}/rest/api/3/search/jql"
+    method: POST
+    force_basic_auth: true
+    user: "{{ jira_user }}"
+    password: "{{ jira_password }}"
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+    body_format: json
+    body:
+      jql: >-
+        project = {{ projeto_jira }}
+        AND (summary ~ "\"{{ jira_resumo_atualizacao }}\""
+        OR summary ~ "\"{{ jira_resumo_criacao }}\"")
+        AND statusCategory != Done
+      maxResults: 1000
+      fields:
+        - summary
+        - description
+        - customfield_10238
+    status_code: 200
+  register: jira_search
+  environment: "{{ proxy_env }}"
+
+# ============================================================
+# 2. Manter somente chamados válidos (summary exatamente igual
+#    a um dos dois resumos)
+# ============================================================
+
+# ============================================================
+# FUTURAMENTE REATIVAR:
+#
+# | selectattr('fields.customfield_10238', 'defined')
+# | selectattr(
+#     'fields.customfield_10238.name',
+#     'equalto',
+#     'CLBR-TI-OPS-IT_SERVICE_MONITORING'
+#   )
+#
+# ============================================================
+
+# CORREÇÃO: antes o filtro comparava com 'Atualização de alerta',
+# texto diferente do resumo usado na JQL, então nenhum chamado
+# passava. Agora o filtro usa as mesmas variáveis da JQL.
+- name: Selecionar tickets de atualização e de criação de alerta
+  ansible.builtin.set_fact:
+    tickets_certificados: >-
+      {{
+        jira_search.json.issues
+        | selectattr('fields.summary', 'in', [jira_resumo_atualizacao, jira_resumo_criacao])
+        | list
+      }}
+
+# A JQL aproximada pode trazer chamados parecidos; avisa quais foram ignorados.
+- name: Avisar sobre chamados retornados pela busca e ignorados
+  ansible.builtin.debug:
+    msg: "Ignorado (resumo diferente dos esperados): {{ item.key }} - {{ item.fields.summary }}"
+  loop: >-
+    {{
+      jira_search.json.issues
+      | rejectattr('fields.summary', 'in', [jira_resumo_atualizacao, jira_resumo_criacao])
+      | list
+    }}
+  loop_control:
+    label: "{{ item.key }}"
+
+# ============================================================
+# 3. Mostrar resultado
+# ============================================================
+
+- name: Mostrar chamados encontrados
+  ansible.builtin.debug:
+    msg:
+      ticket: "{{ item.key }}"
+      resumo: "{{ item.fields.summary }}"
+      blocos_adf: "{{ item.fields.description.content | default([]) | length }}"
+  loop: "{{ tickets_certificados }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+# - name: Mostrar somente tipo dos blocos
+#   debug:
+#     msg:
+#       tipo: "{{ bloco.type }}"
+#       texto: "{{ bloco.content[0].text | default('') }}"
+#   loop: "{{ tickets_certificados[0].fields.description.content }}"
+#   loop_control:
+#     loop_var: bloco
+
+# ============================================================
+# 4. Extrair certificados da descrição (ADF)
+#
+# Extração ADF preservada. Mudanças:
+#   - cada certificado agora carrega 'ticket' e 'operacao'
+#     (ATUALIZACAO ou CRIACAO, conforme o summary do chamado);
+#   - o resultado vai para certificados_jira, que no passo 5 é
+#     separado nas duas listas consumidas pelas roles.
+# ============================================================
+
+- name: Inicializar lista de certificados
+  ansible.builtin.set_fact:
+    certificados_jira: []
+
+- name: Extrair hosts e validades das descrições do Jira
+  ansible.builtin.set_fact:
+    certificados_jira: >-
+      {% set resultado = namespace(certificados=[]) %}
+      {% for ticket in tickets_certificados | default([]) %}
+      {% set estado = namespace(validade='', tipo='') %}
+      {% set operacao = 'CRIACAO' if ticket.fields.summary == jira_resumo_criacao else 'ATUALIZACAO' %}
+      {% for bloco in ticket.fields.description.content | default([]) %}
+      {% if bloco.type == 'paragraph' %}
+      {% set texto = bloco.content | default([])
+         | selectattr('type', 'equalto', 'text')
+         | map(attribute='text')
+         | join('')
+         | trim %}
+      {% if texto | upper == 'EXTERNO' %}
+      {% set estado.tipo = 'Externo' %}
+      {% elif texto | upper in ['INTERNO', 'INTERNOS'] %}
+      {% set estado.tipo = 'Interno' %}
+      {% elif texto is match('^[0-9]{2}/[0-9]{2}/[0-9]{4}$') %}
+      {% set estado.validade = texto %}
+      {% endif %}
+      {% elif bloco.type == 'bulletList' %}
+      {% for item in bloco.content | default([]) %}
+      {% for paragrafo in item.content | default([]) %}
+      {% if paragrafo.type == 'paragraph' %}
+      {% set host = (
+        paragrafo.content | default([])
+        | selectattr('type', 'equalto', 'text')
+        | map(attribute='text')
+        | join('')
+        | trim
+        | regex_replace('^\\*\\.', 'star.')
+      ) %}
+      {% if host and estado.validade %}
+      {% set resultado.certificados = resultado.certificados + [
+        {
+          'ticket': ticket.key,
+          'operacao': operacao,
+          'host': host,
+          'tipo': estado.tipo,
+          'validade': estado.validade
+        }
+      ] %}
+      {% endif %}
+      {% endif %}
+      {% endfor %}
+      {% endfor %}
+      {% endif %}
+      {% endfor %}
+      {% endfor %}
+      {{ resultado.certificados | to_yaml | from_yaml }}
+
+- name: Converter texto para lista
+  ansible.builtin.set_fact:
+    certificados_jira: "{{ certificados_jira | from_yaml }}"
+
+# ============================================================
+# 5. Separar atualização x criação (nunca se misturam).
+#    certificados_para_atualizar mantém o nome original.
+#    'unique' remove linhas idênticas repetidas no mesmo chamado.
+# ============================================================
+
+- name: Separar certificados de atualização e de criação
+  ansible.builtin.set_fact:
+    certificados_para_atualizar: "{{ certificados_jira | selectattr('operacao', 'equalto', 'ATUALIZACAO') | unique | list }}"
+    certificados_para_criar: "{{ certificados_jira | selectattr('operacao', 'equalto', 'CRIACAO') | unique | list }}"
+
+- name: Exibir certificados encontrados
+  ansible.builtin.debug:
+    msg:
+      operacao: "{{ item.operacao }}"
+      ticket: "{{ item.ticket }}"
+      host: "{{ item.host }}"
+      tipo: "{{ item.tipo }}"
+      validade: "{{ item.validade }}"
+  loop: "{{ certificados_jira }}"
+  loop_control:
+    label: "{{ item.operacao }} {{ item.host }}"
+
+
+############################################################
+# ./roles/inventory/tasks/main.yml
+############################################################
+---
+# Cria em memória o host usado pelo connection plugin da
+# community.zabbix. Nada é executado no Zabbix aqui.
+#
+# Se zabbix_habilitado for false, esta role não faz nada e o
+# playbook segue normalmente (o Dynatrace nunca depende disso).
+
+- name: Avisar que o Zabbix está desabilitado
+  ansible.builtin.debug:
+    msg: >-
+      zabbix_habilitado=false: o host virtual não será criado e
+      a role "outage" vai pular as tasks do Zabbix.
+  when: not zabbix_habilitado
+
+- name: Validar configuração de acesso ao Zabbix
+  ansible.builtin.assert:
+    that:
+      - zabbix_host | length > 0
+      - zabbix_api_token | length > 0
+    fail_msg: >-
+      Configure zabbix_host e use o token
+      antes de executar o playbook (ou defina
+      zabbix_habilitado: false para pular o Zabbix).
+  when: zabbix_habilitado
+
+- name: Registrar host virtual para a API do Zabbix
+  ansible.builtin.add_host:
+    name: "{{ zabbix_inventory_host }}"
+    ansible_host: "{{ zabbix_host }}"
+    ansible_connection: httpapi
+    ansible_network_os: community.zabbix.zabbix
+    ansible_httpapi_port: "{{ zabbix_port }}"
+    ansible_httpapi_use_ssl: "{{ zabbix_use_ssl }}"
+    ansible_httpapi_validate_certs: "{{ zabbix_validate_certs }}"
+    ansible_zabbix_url_path: "{{ zabbix_url_path }}"
+    ansible_zabbix_auth_key: "{{ zabbix_api_token }}"
+  changed_when: false
+  when: zabbix_habilitado
+
+############################################################
+# ./roles/relatorios/tasks/certificados.yml
+############################################################
+---
+# ============================================================
+# Relatório dos certificados (atualização + criação).
+#
+# Chamado pelo playbook com "tasks_from: certificados". É um
+# arquivo à parte: o tasks/main.yml (GMUDs / Outages / Dynatrace)
+# não é usado nem alterado, e nenhum dado de GMUD entra aqui.
+#
+# Entrada: resultado_atualizacao e resultado_criacao (geradas
+# pelas roles atualiza e cria; podem não existir se a role não
+# rodou) e a variável email (Survey do AAP).
+#
+# CSV: delimitador ";" (Excel em português abre direto) e UTF-8
+# com BOM (acentos corretos no Excel). Todos os campos entre aspas,
+# com aspas internas duplicadas (RFC 4180). Para usar vírgula,
+# informe csv_delimitador: ",".
+# ============================================================
+
+- name: Consolidar os resultados de certificados
+  ansible.builtin.set_fact:
+    relatorio_certificados: "{{ (resultado_atualizacao | default([])) + (resultado_criacao | default([])) }}"
+
+- name: Informar que não há o que reportar
+  ansible.builtin.debug:
+    msg: "Nenhum certificado foi processado; relatório não gerado e e-mail não enviado."
+  when: relatorio_certificados | length == 0
+
+- name: Gerar e enviar o relatório
+  when: relatorio_certificados | length > 0
+  vars:
+    csv_colunas:
+      - operacao
+      - ticket
+      - host
+      - tipo
+      - itemid
+      - validade_anterior
+      - validade_solicitada
+      - status
+      - mensagem
+    csv_sep: "{{ csv_delimitador | default(';') }}"
+    relatorio_csv: "/tmp/relatorio_certificados_{{ ansible_date_time.iso8601_basic_short }}.csv"
+  block:
+    - name: Gravar o CSV
+      ansible.builtin.copy:
+        dest: "{{ relatorio_csv }}"
+        mode: "0600"
+        content: |-
+          {{ '﻿' ~ (csv_colunas | join(csv_sep)) ~ '\n' -}}
+          {% for linha in relatorio_certificados -%}
+          {% for col in csv_colunas -%}
+          "{{ linha[col] | default('') | string | replace('\n', ' ') | replace('"', '""') }}"{{ csv_sep if not loop.last else '' }}
+          {%- endfor -%}
+          {{ '\n' }}
+          {%- endfor %}
+
+    - name: EMAIL | Enviar relatório de certificados
+      community.general.mail:
+        host: vip_smtp.claro.com.br
+        port: 25
+        from: coeeaiops@claro.com.br
+        to: "{{ email }}"
+        subject: >-
+          Relatorio Certificados Zabbix -
+          {{ ansible_date_time.date }}{{ ' (SIMULACAO)' if not zabbix_aplicar_alteracoes | bool else '' }}
+        subtype: plain
+        attach:
+          - "{{ relatorio_csv }}"
+        body: |
+          Prezado(a),
+
+          Segue em anexo o relatório dos certificados processados pela automação (Jira -> Zabbix).
+
+          Modo: {{ 'APLICADO (alterações realizadas no Zabbix)' if zabbix_aplicar_alteracoes | bool else 'SIMULAÇÃO (nenhuma alteração foi feita no Zabbix)' }}
+          Data/Hora: {{ ansible_date_time.date }} {{ ansible_date_time.time }}
+          Total de certificados processados: {{ relatorio_certificados | length }}
+
+          Resumo por operação e status:
+          {% for operacao, itens in relatorio_certificados | groupby('operacao') %}
+          {{ operacao }}
+          {% for status, grupo in itens | groupby('status') %}
+            - {{ status }}: {{ grupo | length }}
+          {% endfor %}
+          {% endfor %}
+
+          Este é um e-mail automático gerado pelo Ansible.
+
+    - name: Remover o CSV temporário
+      ansible.builtin.file:
+        path: "{{ relatorio_csv }}"
+        state: absent
+
+    # O e-mail sai mesmo com erros (o relatório precisa chegar); depois
+    # o job é marcado como falho para quem acompanha o AAP perceber.
+    - name: Falhar o job se alguma operação terminou em ERRO
+      ansible.builtin.fail:
+        msg: >-
+          {{ relatorio_certificados | selectattr('status', 'equalto', 'ERRO') | list | length }}
+          operação(ões) terminaram em ERRO. Veja o relatório enviado para {{ email }}.
+      when: relatorio_certificados | selectattr('status', 'equalto', 'ERRO') | list | length > 0
+
