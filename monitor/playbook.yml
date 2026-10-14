@@ -40,16 +40,16 @@
   pre_tasks:
     # Falha antes de qualquer alteração no Zabbix, para não alterar
     # nada e só então descobrir que o relatório não tem destinatário.
-    - name: Validar o destinatário do relatório (variável email da Survey)
-      ansible.builtin.assert:
-        that:
-          - email is defined
-          - email | string | trim | length > 0
-          - "'@' in (email | string)"
-        fail_msg: >-
-          Informe a variável "email" na Survey do AAP com o endereço que
-          receberá o relatório (ex.: usuario@empresa.com).
-        quiet: true
+    # - name: Validar o destinatário do relatório (variável email da Survey)
+    #   ansible.builtin.assert:
+    #     that:
+    #       - email is defined
+    #       - email | string | trim | length > 0
+    #       - "'@' in (email | string)"
+    #     fail_msg: >-
+    #       Informe a variável "email" na Survey do AAP com o endereço que
+    #       receberá o relatório (ex.: usuario@empresa.com).
+    #     quiet: true
 
     - name: Validar que o Zabbix está habilitado
       ansible.builtin.assert:
@@ -79,5 +79,5 @@
     # Gera o CSV e envia para o e-mail informado na Survey
     # (tasks/certificados.yml; o fluxo de GMUDs em tasks/main.yml
     # não é tocado).
-    - role: relatorios
-      tasks_from: certificados
+    # - role: relatorios
+    #   tasks_from: certificados

@@ -665,3 +665,19 @@
   # when:
   #   - email_destino is defined
   #   - email_destino | length > 0
+
+
+#Exemplo de output atual 
+certificados_para_atualizar:
+
+  - host: acesso.claro.com.br
+    tipo: Externo
+    validade: 19/04/2027
+
+  - host: poc-waf.claro.com.br
+    tipo: Interno
+    validade: 01/10/2026
+
+  - host: star.primesys.com.br
+    tipo: Externo
+    validade: 15/04/2027
