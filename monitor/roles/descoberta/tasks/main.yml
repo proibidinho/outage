@@ -1,0 +1,192 @@
+# ============================================================
+# 1. Buscar chamados candidatos
+#
+# A JQL usa "~" (busca de texto, aproximada). Por isso ela só
+# traz candidatos; o filtro exato por summary é feito no passo 2.
+# Os dois resumos vêm do playbook (jira_resumo_atualizacao e
+# jira_resumo_criacao), para JQL e filtro local nunca divergirem.
+# ============================================================
+
+- name: Buscar chamados de atualização e de criação de alerta
+  ansible.builtin.uri:
+    url: "{{ jira_base_url }}/rest/api/3/search/jql"
+    method: POST
+    force_basic_auth: true
+    user: "{{ jira_user }}"
+    password: "{{ jira_password }}"
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+    body_format: json
+    body:
+      jql: >-
+        project = {{ projeto_jira }}
+        AND (summary ~ "\"{{ jira_resumo_atualizacao }}\""
+        OR summary ~ "\"{{ jira_resumo_criacao }}\"")
+        AND statusCategory != Done
+      maxResults: 1000
+      fields:
+        - summary
+        - description
+        - customfield_10238
+    status_code: 200
+  register: jira_search
+  environment: "{{ proxy_env }}"
+
+# ============================================================
+# 2. Manter somente chamados válidos (summary exatamente igual
+#    a um dos dois resumos)
+# ============================================================
+
+# ============================================================
+# FUTURAMENTE REATIVAR:
+#
+# | selectattr('fields.customfield_10238', 'defined')
+# | selectattr(
+#     'fields.customfield_10238.name',
+#     'equalto',
+#     'CLBR-TI-OPS-IT_SERVICE_MONITORING'
+#   )
+#
+# ============================================================
+
+# CORREÇÃO: antes o filtro comparava com 'Atualização de alerta',
+# texto diferente do resumo usado na JQL, então nenhum chamado
+# passava. Agora o filtro usa as mesmas variáveis da JQL.
+- name: Selecionar tickets de atualização e de criação de alerta
+  ansible.builtin.set_fact:
+    tickets_certificados: >-
+      {{
+        jira_search.json.issues
+        | selectattr('fields.summary', 'in', [jira_resumo_atualizacao, jira_resumo_criacao])
+        | list
+      }}
+
+# A JQL aproximada pode trazer chamados parecidos; avisa quais foram ignorados.
+- name: Avisar sobre chamados retornados pela busca e ignorados
+  ansible.builtin.debug:
+    msg: "Ignorado (resumo diferente dos esperados): {{ item.key }} - {{ item.fields.summary }}"
+  loop: >-
+    {{
+      jira_search.json.issues
+      | rejectattr('fields.summary', 'in', [jira_resumo_atualizacao, jira_resumo_criacao])
+      | list
+    }}
+  loop_control:
+    label: "{{ item.key }}"
+
+# ============================================================
+# 3. Mostrar resultado
+# ============================================================
+
+- name: Mostrar chamados encontrados
+  ansible.builtin.debug:
+    msg:
+      ticket: "{{ item.key }}"
+      resumo: "{{ item.fields.summary }}"
+      blocos_adf: "{{ item.fields.description.content | default([]) | length }}"
+  loop: "{{ tickets_certificados }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+# - name: Mostrar somente tipo dos blocos
+#   debug:
+#     msg:
+#       tipo: "{{ bloco.type }}"
+#       texto: "{{ bloco.content[0].text | default('') }}"
+#   loop: "{{ tickets_certificados[0].fields.description.content }}"
+#   loop_control:
+#     loop_var: bloco
+
+# ============================================================
+# 4. Extrair certificados da descrição (ADF)
+#
+# Extração ADF preservada. Mudanças:
+#   - cada certificado agora carrega 'ticket' e 'operacao'
+#     (ATUALIZACAO ou CRIACAO, conforme o summary do chamado);
+#   - o resultado vai para certificados_jira, que no passo 5 é
+#     separado nas duas listas consumidas pelas roles.
+# ============================================================
+
+- name: Inicializar lista de certificados
+  ansible.builtin.set_fact:
+    certificados_jira: []
+
+- name: Extrair hosts e validades das descrições do Jira
+  ansible.builtin.set_fact:
+    certificados_jira: >-
+      {% set resultado = namespace(certificados=[]) %}
+      {% for ticket in tickets_certificados | default([]) %}
+      {% set estado = namespace(validade='', tipo='') %}
+      {% set operacao = 'CRIACAO' if ticket.fields.summary == jira_resumo_criacao else 'ATUALIZACAO' %}
+      {% for bloco in ticket.fields.description.content | default([]) %}
+      {% if bloco.type == 'paragraph' %}
+      {% set texto = bloco.content | default([])
+         | selectattr('type', 'equalto', 'text')
+         | map(attribute='text')
+         | join('')
+         | trim %}
+      {% if texto | upper == 'EXTERNO' %}
+      {% set estado.tipo = 'Externo' %}
+      {% elif texto | upper in ['INTERNO', 'INTERNOS'] %}
+      {% set estado.tipo = 'Interno' %}
+      {% elif texto is match('^[0-9]{2}/[0-9]{2}/[0-9]{4}$') %}
+      {% set estado.validade = texto %}
+      {% endif %}
+      {% elif bloco.type == 'bulletList' %}
+      {% for item in bloco.content | default([]) %}
+      {% for paragrafo in item.content | default([]) %}
+      {% if paragrafo.type == 'paragraph' %}
+      {% set host = (
+        paragrafo.content | default([])
+        | selectattr('type', 'equalto', 'text')
+        | map(attribute='text')
+        | join('')
+        | trim
+        | regex_replace('^\\*\\.', 'star.')
+      ) %}
+      {% if host and estado.validade %}
+      {% set resultado.certificados = resultado.certificados + [
+        {
+          'ticket': ticket.key,
+          'operacao': operacao,
+          'host': host,
+          'tipo': estado.tipo,
+          'validade': estado.validade
+        }
+      ] %}
+      {% endif %}
+      {% endif %}
+      {% endfor %}
+      {% endfor %}
+      {% endif %}
+      {% endfor %}
+      {% endfor %}
+      {{ resultado.certificados | to_yaml | from_yaml }}
+
+- name: Converter texto para lista
+  ansible.builtin.set_fact:
+    certificados_jira: "{{ certificados_jira | from_yaml }}"
+
+# ============================================================
+# 5. Separar atualização x criação (nunca se misturam).
+#    certificados_para_atualizar mantém o nome original.
+#    'unique' remove linhas idênticas repetidas no mesmo chamado.
+# ============================================================
+
+- name: Separar certificados de atualização e de criação
+  ansible.builtin.set_fact:
+    certificados_para_atualizar: "{{ certificados_jira | selectattr('operacao', 'equalto', 'ATUALIZACAO') | unique | list }}"
+    certificados_para_criar: "{{ certificados_jira | selectattr('operacao', 'equalto', 'CRIACAO') | unique | list }}"
+
+- name: Exibir certificados encontrados
+  ansible.builtin.debug:
+    msg:
+      operacao: "{{ item.operacao }}"
+      ticket: "{{ item.ticket }}"
+      host: "{{ item.host }}"
+      tipo: "{{ item.tipo }}"
+      validade: "{{ item.validade }}"
+  loop: "{{ certificados_jira }}"
+  loop_control:
+    label: "{{ item.operacao }} {{ item.host }}"

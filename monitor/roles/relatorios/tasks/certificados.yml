@@ -1,0 +1,100 @@
+---
+# ============================================================
+# Relatório dos certificados (atualização + criação).
+#
+# Chamado pelo playbook com "tasks_from: certificados". É um
+# arquivo à parte: o tasks/main.yml (GMUDs / Outages / Dynatrace)
+# não é usado nem alterado, e nenhum dado de GMUD entra aqui.
+#
+# Entrada: resultado_atualizacao e resultado_criacao (geradas
+# pelas roles atualiza e cria; podem não existir se a role não
+# rodou) e a variável email (Survey do AAP).
+#
+# CSV: delimitador ";" (Excel em português abre direto) e UTF-8
+# com BOM (acentos corretos no Excel). Todos os campos entre aspas,
+# com aspas internas duplicadas (RFC 4180). Para usar vírgula,
+# informe csv_delimitador: ",".
+# ============================================================
+
+- name: Consolidar os resultados de certificados
+  ansible.builtin.set_fact:
+    relatorio_certificados: "{{ (resultado_atualizacao | default([])) + (resultado_criacao | default([])) }}"
+
+- name: Informar que não há o que reportar
+  ansible.builtin.debug:
+    msg: "Nenhum certificado foi processado; relatório não gerado e e-mail não enviado."
+  when: relatorio_certificados | length == 0
+
+- name: Gerar e enviar o relatório
+  when: relatorio_certificados | length > 0
+  vars:
+    csv_colunas:
+      - operacao
+      - ticket
+      - host
+      - tipo
+      - itemid
+      - validade_anterior
+      - validade_solicitada
+      - status
+      - mensagem
+    csv_sep: "{{ csv_delimitador | default(';') }}"
+    relatorio_csv: "/tmp/relatorio_certificados_{{ ansible_date_time.iso8601_basic_short }}.csv"
+  block:
+    - name: Gravar o CSV
+      ansible.builtin.copy:
+        dest: "{{ relatorio_csv }}"
+        mode: "0600"
+        content: |-
+          {{ '﻿' ~ (csv_colunas | join(csv_sep)) ~ '\n' -}}
+          {% for linha in relatorio_certificados -%}
+          {% for col in csv_colunas -%}
+          "{{ linha[col] | default('') | string | replace('\n', ' ') | replace('"', '""') }}"{{ csv_sep if not loop.last else '' }}
+          {%- endfor -%}
+          {{ '\n' }}
+          {%- endfor %}
+
+    - name: EMAIL | Enviar relatório de certificados
+      community.general.mail:
+        host: vip_smtp.claro.com.br
+        port: 25
+        from: coeeaiops@claro.com.br
+        to: "{{ email }}"
+        subject: >-
+          Relatorio Certificados Zabbix -
+          {{ ansible_date_time.date }}{{ ' (SIMULACAO)' if not zabbix_aplicar_alteracoes | bool else '' }}
+        subtype: plain
+        attach:
+          - "{{ relatorio_csv }}"
+        body: |
+          Prezado(a),
+
+          Segue em anexo o relatório dos certificados processados pela automação (Jira -> Zabbix).
+
+          Modo: {{ 'APLICADO (alterações realizadas no Zabbix)' if zabbix_aplicar_alteracoes | bool else 'SIMULAÇÃO (nenhuma alteração foi feita no Zabbix)' }}
+          Data/Hora: {{ ansible_date_time.date }} {{ ansible_date_time.time }}
+          Total de certificados processados: {{ relatorio_certificados | length }}
+
+          Resumo por operação e status:
+          {% for operacao, itens in relatorio_certificados | groupby('operacao') %}
+          {{ operacao }}
+          {% for status, grupo in itens | groupby('status') %}
+            - {{ status }}: {{ grupo | length }}
+          {% endfor %}
+          {% endfor %}
+
+          Este é um e-mail automático gerado pelo Ansible.
+
+    - name: Remover o CSV temporário
+      ansible.builtin.file:
+        path: "{{ relatorio_csv }}"
+        state: absent
+
+    # O e-mail sai mesmo com erros (o relatório precisa chegar); depois
+    # o job é marcado como falho para quem acompanha o AAP perceber.
+    - name: Falhar o job se alguma operação terminou em ERRO
+      ansible.builtin.fail:
+        msg: >-
+          {{ relatorio_certificados | selectattr('status', 'equalto', 'ERRO') | list | length }}
+          operação(ões) terminaram em ERRO. Veja o relatório enviado para {{ email }}.
+      when: relatorio_certificados | selectattr('status', 'equalto', 'ERRO') | list | length > 0

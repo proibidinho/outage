@@ -1,0 +1,83 @@
+---
+- name: Atualiza e cria alertas de certificado no Zabbix baseado em chamados de GA
+  hosts: localhost
+  gather_facts: true
+  environment:
+    TZ: "America/Sao_Paulo"
+
+  vars:
+    # ----------------------------------------------------------
+    # Resumos (summary) que diferenciam os dois tipos de chamado.
+    # Usados na JQL e no filtro local da role descoberta.
+    # ----------------------------------------------------------
+    jira_resumo_atualizacao: "Atualização de Alerta de Certificado - Zabbix"
+    jira_resumo_criacao: "Criação de Alerta de Certificado - Zabbix"
+
+    # ----------------------------------------------------------
+    # Zabbix: host e padrão de chave dos itens de certificado.
+    # Chave: zbx_valida_data_certificado["host","Tipo","DD/MM/AAAA"]
+    #
+    # zabbix_chave_regex  -> extrai (host, tipo, data) de uma chave.
+    # zabbix_data_regex   -> localiza somente a data dentro da chave.
+    # (regex em aspas simples do YAML: a barra invertida é literal)
+    # ----------------------------------------------------------
+    zabbix_host_certificados: "CERTIFICADOS_CLARO_BRASIL"
+    zabbix_chave_certificado: "zbx_valida_data_certificado"
+    zabbix_chave_regex: '^zbx_valida_data_certificado\[\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,\s*"([0-9]{2}/[0-9]{2}/[0-9]{4})"\s*\]$'
+    zabbix_data_regex: '[0-9]{2}/[0-9]{2}/[0-9]{4}(?="\s*\]$)'
+
+    # URL da API (antes montada com set_fact dentro das roles).
+    zabbix_api_url: >-
+      {{ 'https' if zabbix_use_ssl | bool else 'http' }}://{{ zabbix_host }}{{ (':' ~ zabbix_port) if zabbix_port | int not in [80, 443] else '' }}{{ ('/' ~ zabbix_url_path) if zabbix_url_path | length > 0 else '' }}/api_jsonrpc.php
+
+    # ----------------------------------------------------------
+    # Segurança: por padrão NADA é gravado no Zabbix (simulação).
+    # Para gravar de verdade, informe aplicar_alteracoes: true
+    # (Survey do AAP ou extra vars).
+    # ----------------------------------------------------------
+    zabbix_aplicar_alteracoes: "{{ aplicar_alteracoes | default(false) | bool }}"
+
+  pre_tasks:
+    # Falha antes de qualquer alteração no Zabbix, para não alterar
+    # nada e só então descobrir que o relatório não tem destinatário.
+    - name: Validar o destinatário do relatório (variável email da Survey)
+      ansible.builtin.assert:
+        that:
+          - email is defined
+          - email | string | trim | length > 0
+          - "'@' in (email | string)"
+        fail_msg: >-
+          Informe a variável "email" na Survey do AAP com o endereço que
+          receberá o relatório (ex.: usuario@empresa.com).
+        quiet: true
+
+    - name: Validar que o Zabbix está habilitado
+      ansible.builtin.assert:
+        that:
+          - zabbix_habilitado | default(true) | bool
+        fail_msg: >-
+          Este playbook só trabalha com o Zabbix; zabbix_habilitado
+          não pode ser false.
+        quiet: true
+
+  roles:
+    # Cria o host virtual usado pelas tasks do Zabbix
+    - role: inventory
+
+    # Procura os chamados no Jira e separa em:
+    #   certificados_para_atualizar / certificados_para_criar
+    - role: descoberta
+
+    # Altera a validade (chave) de itens já cadastrados
+    - role: atualiza
+      when: certificados_para_atualizar | length > 0
+
+    # Cadastra itens novos
+    - role: cria
+      when: certificados_para_criar | length > 0
+
+    # Gera o CSV e envia para o e-mail informado na Survey
+    # (tasks/certificados.yml; o fluxo de GMUDs em tasks/main.yml
+    # não é tocado).
+    - role: relatorios
+      tasks_from: certificados

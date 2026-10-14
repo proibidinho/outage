@@ -1,0 +1,265 @@
+---
+# ============================================================
+# Role cria: cadastra itens NOVOS de certificado no host
+# CERTIFICADOS_CLARO_BRASIL, sem duplicar os que já existem.
+#
+# Entrada (role descoberta):
+#   certificados_para_criar:
+#     - ticket: GA-456
+#       operacao: CRIACAO
+#       host: novo.claro.com.br
+#       tipo: Externo
+#       validade: "20/08/2027"
+#
+# Saída (consumida pela role relatorios):
+#   resultado_criacao (mesmas colunas de resultado_atualizacao).
+#
+# Status possíveis:
+#   CRIADO         API confirmou a criação (itemid novo na linha)
+#   SIMULADO       aplicar_alteracoes = false (nada foi gravado)
+#   JA_EXISTE      já há item para host + tipo (não cria; para mudar
+#                  a data use chamado de atualização)
+#   SEM_MODELO     não há item-modelo do mesmo tipo no host, ou o nome
+#                  dele não permite derivar o nome do novo item
+#   CONFLITO       chamados pedem validades diferentes para o mesmo
+#                  certificado (não cria)
+#   TIPO_INVALIDO  descrição do chamado sem Externo/Interno
+#   ERRO           a API retornou erro ou não respondeu
+#
+# Como o item novo é montado (nada é inventado):
+#   - key_  : a key do item-modelo, trocando host e data;
+#   - name  : o nome do item-modelo, trocando host e data;
+#   - hostid: obtido por host.get do host de certificados;
+#   - demais atributos: copiados do item-modelo (cria_campos_modelo).
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. hostid do host de certificados (necessário no item.create).
+# ------------------------------------------------------------
+- name: Buscar o hostid do host de certificados
+  ansible.builtin.uri:
+    url: "{{ zabbix_api_url }}"
+    method: POST
+    body_format: json
+    headers:
+      Content-Type: application/json-rpc
+    body:
+      jsonrpc: "2.0"
+      method: "host.get"
+      params:
+        filter:
+          host:
+            - "{{ zabbix_host_certificados }}"
+        output:
+          - hostid
+          - host
+      auth: "{{ zabbix_api_token }}"
+      id: 1
+    validate_certs: "{{ zabbix_validate_certs }}"
+  delegate_to: localhost
+  register: zbx_host
+  failed_when: >-
+    zbx_host.json is not defined
+    or zbx_host.json.error is defined
+    or zbx_host.json.result is not defined
+    or zbx_host.json.result | length != 1
+
+- name: Guardar o hostid
+  ansible.builtin.set_fact:
+    zbx_hostid: "{{ zbx_host.json.result[0].hostid }}"
+
+# ------------------------------------------------------------
+# 2. Itens de certificado já existentes, com TODOS os atributos
+#    (output extend), tags e pré-processamento: servem para
+#    detectar duplicatas e como modelo.
+# ------------------------------------------------------------
+- name: Buscar itens de certificado no Zabbix
+  ansible.builtin.uri:
+    url: "{{ zabbix_api_url }}"
+    method: POST
+    body_format: json
+    headers:
+      Content-Type: application/json-rpc
+    body:
+      jsonrpc: "2.0"
+      method: "item.get"
+      params:
+        hostids: "{{ zbx_hostid }}"
+        search:
+          key_: "{{ zabbix_chave_certificado }}"
+        output: "extend"
+        selectTags: "extend"
+        selectPreprocessing: "extend"
+        sortfield: "itemid"
+      auth: "{{ zabbix_api_token }}"
+      id: 1
+    validate_certs: "{{ zabbix_validate_certs }}"
+  delegate_to: localhost
+  register: zbx_itens
+  failed_when: >-
+    zbx_itens.json is not defined
+    or zbx_itens.json.error is defined
+    or zbx_itens.json.result is not defined
+
+# host_orig guarda o host exatamente como está na key (com maiúsculas
+# e minúsculas), usado para trocar o host no nome e na key do modelo.
+- name: Interpretar a key dos itens existentes
+  ansible.builtin.set_fact:
+    zbx_certs: >-
+      {%- set r = namespace(lista=[]) -%}
+      {%- for i in zbx_itens.json.result -%}
+      {%- set p = i.key_ | regex_findall(zabbix_chave_regex) -%}
+      {%- if p -%}
+      {%- set r.lista = r.lista + [{'itemid': i.itemid, 'name': i.name, 'key_': i.key_, 'host': p[0][0] | lower, 'host_orig': p[0][0], 'tipo': p[0][1] | lower, 'data': p[0][2], 'item': i}] -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ r.lista }}
+
+# ------------------------------------------------------------
+# 3. Planejar: decide o que fazer com cada certificado, SEM
+#    criar nada. Ordem do "status" = prioridade das regras.
+#    O payload mostrado é exatamente o que iria no item.create.
+# ------------------------------------------------------------
+- name: Planejar criações (somente leitura)
+  ansible.builtin.debug:
+    msg:
+      operacao: "CRIACAO"
+      ticket: "{{ item.ticket }}"
+      host: "{{ item.host }}"
+      tipo: "{{ item.tipo }}"
+      itemid: "{{ existentes[0].itemid if existentes | length > 0 else '' }}"
+      validade_anterior: "{{ existentes[0].data if existentes | length > 0 else '' }}"
+      validade_solicitada: "{{ item.validade }}"
+      status: "{{ status }}"
+      mensagem: "{{ mensagem }}"
+      payload: "{{ payload }}"
+  vars:
+    # itens que já existem para o mesmo host + tipo (qualquer data)
+    existentes: >-
+      {{ zbx_certs
+         | selectattr('host', 'equalto', item.host | lower)
+         | selectattr('tipo', 'equalto', item.tipo | lower)
+         | list }}
+    # item-modelo: primeiro item (menor itemid) do mesmo tipo
+    modelo: >-
+      {{ zbx_certs
+         | selectattr('tipo', 'equalto', item.tipo | lower)
+         | first
+         | default({}) }}
+    # o nome do modelo precisa conter o host para podermos trocá-lo
+    modelo_ok: "{{ modelo | length > 0 and modelo.host_orig in modelo.item.name }}"
+    datas_pedidas: >-
+      {{ certificados_para_criar
+         | selectattr('host', 'equalto', item.host)
+         | selectattr('tipo', 'equalto', item.tipo)
+         | map(attribute='validade')
+         | unique
+         | list }}
+    status: >-
+      {{ 'TIPO_INVALIDO' if (item.tipo | lower) not in ['externo', 'interno']
+         else 'CONFLITO' if datas_pedidas | length > 1
+         else 'JA_EXISTE' if existentes | length > 0
+         else 'SEM_MODELO' if not modelo_ok
+         else 'PENDENTE' }}
+    mensagem: >-
+      {{ 'Tipo não identificado na descrição do chamado (esperado Externo ou Interno).' if status == 'TIPO_INVALIDO'
+         else 'Chamados pedem validades diferentes para o mesmo certificado (' ~ (datas_pedidas | join(', ')) ~ '). Nada foi criado.' if status == 'CONFLITO'
+         else 'Já existe item para este host e tipo (itemid ' ~ existentes[0].itemid ~ ', validade ' ~ existentes[0].data ~ '). Nada foi criado; para mudar a data use um chamado de atualização.' if status == 'JA_EXISTE'
+         else 'Sem item-modelo do tipo ' ~ item.tipo ~ ' no host, ou o nome do modelo não contém o host. Nada foi criado.' if status == 'SEM_MODELO'
+         else 'Aguardando criação.' }}
+    nome: >-
+      {{ modelo.item.name | replace(modelo.host_orig, item.host) | replace(modelo.data, item.validade) if status == 'PENDENTE' else '' }}
+    # key do modelo com o host e a data trocados (mantém o formato da key)
+    chave: >-
+      {{ modelo.key_ | replace('"' ~ modelo.host_orig ~ '"', '"' ~ item.host ~ '"') | regex_replace(zabbix_data_regex, item.validade) if status == 'PENDENTE' else '' }}
+    # atributos do modelo (somente os de cria_campos_modelo, e só se preenchidos)
+    campos_modelo: >-
+      {{ modelo.item | dict2items
+         | selectattr('key', 'in', cria_campos_modelo)
+         | rejectattr('value', 'in', ['', []])
+         | items2dict }}
+    payload: >-
+      {{ {'hostid': zbx_hostid, 'name': nome, 'key_': chave} | combine(campos_modelo) if status == 'PENDENTE' else {} }}
+  loop: "{{ certificados_para_criar }}"
+  loop_control:
+    label: "{{ item.host }} ({{ item.tipo }})"
+  register: zbx_plano_loop
+
+- name: Guardar o plano
+  ansible.builtin.set_fact:
+    zbx_plano: "{{ zbx_plano_loop.results | map(attribute='msg') | list }}"
+
+# ------------------------------------------------------------
+# 4. Criar. Só vai para a API o que ficou PENDENTE e somente com
+#    aplicar_alteracoes = true. failed_when: false -> um erro não
+#    interrompe os demais; o resultado real é avaliado no passo 5.
+# ------------------------------------------------------------
+- name: Criar os itens no Zabbix
+  ansible.builtin.uri:
+    url: "{{ zabbix_api_url }}"
+    method: POST
+    body_format: json
+    headers:
+      Content-Type: application/json-rpc
+    body:
+      jsonrpc: "2.0"
+      method: "item.create"
+      params: "{{ item.payload }}"
+      auth: "{{ zabbix_api_token }}"
+      id: 1
+    validate_certs: "{{ zabbix_validate_certs }}"
+  delegate_to: localhost
+  loop: "{{ zbx_plano }}"
+  loop_control:
+    label: "{{ item.host }} ({{ item.tipo }})"
+  when: item.status == 'PENDENTE' and zabbix_aplicar_alteracoes | bool
+  register: zbx_create
+  failed_when: false
+
+# ------------------------------------------------------------
+# 5. Resultado final. Sucesso = HTTP 200 + sem "error" no JSON-RPC
+#    + um itemid em result.itemids. Qualquer outra coisa vira ERRO
+#    com a mensagem da API (ou do transporte).
+# ------------------------------------------------------------
+- name: Consolidar resultado da criação
+  ansible.builtin.debug:
+    msg:
+      operacao: "{{ linha.operacao }}"
+      ticket: "{{ linha.ticket }}"
+      host: "{{ linha.host }}"
+      tipo: "{{ linha.tipo }}"
+      itemid: "{{ novo_itemid if status == 'CRIADO' else linha.itemid }}"
+      validade_anterior: "{{ linha.validade_anterior }}"
+      validade_solicitada: "{{ linha.validade_solicitada }}"
+      status: "{{ status }}"
+      mensagem: "{{ mensagem }}"
+  vars:
+    linha: "{{ item.0 }}"
+    resp: "{{ item.1 }}"
+    novo_itemid: "{{ resp.json.result.itemids[0] | default('') if resp.json is defined and resp.json.error is not defined else '' }}"
+    api_ok: >-
+      {{ resp.json is defined
+         and resp.json.error is not defined
+         and resp.json.result.itemids | default([]) | length == 1 }}
+    api_erro: >-
+      {{ (resp.json.error.message ~ ' - ' ~ (resp.json.error.data | default('')))
+         if resp.json is defined and resp.json.error is defined
+         else (resp.msg | default('Sem resposta válida da API.')) }}
+    status: >-
+      {{ linha.status if linha.status != 'PENDENTE'
+         else 'SIMULADO' if resp.skipped | default(false)
+         else 'CRIADO' if api_ok
+         else 'ERRO' }}
+    mensagem: >-
+      {{ linha.mensagem if linha.status != 'PENDENTE'
+         else 'Simulação (aplicar_alteracoes=false): seria criado o item "' ~ linha.payload.name ~ '" com a key ' ~ linha.payload.key_ if status == 'SIMULADO'
+         else 'Item criado: ' ~ linha.payload.key_ if status == 'CRIADO'
+         else api_erro }}
+  loop: "{{ zbx_plano | zip(zbx_create.results) | list }}"
+  loop_control:
+    label: "{{ item.0.host }} ({{ item.0.tipo }})"
+  register: zbx_resultado_loop
+
+- name: Guardar o resultado para o relatório
+  ansible.builtin.set_fact:
+    resultado_criacao: "{{ zbx_resultado_loop.results | map(attribute='msg') | list }}"
