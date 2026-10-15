@@ -1385,3 +1385,52 @@ Este é um e-mail automático gerado pela automação de atualização de certif
 </body>
 </html>
 
+
+
+
+#Corpo de trigger zabbix
+Name
+Certificado Externo *.flexdev.aws.clarobrasil.mobi expirado
+Event name
+Certificado Externo *.flexdev.aws.clarobrasil.mobi expirado
+
+Operational data
+Severity
+Not classifiedInformationWarningAverageHighDisaster
+Problem expression
+find(/CERTIFICADOS_CLARO_BRASIL/zbx_valida_data_certificado["flexdev.aws.clarobrasil.mobi","Externo","07/07/2026"],#1,"like","expirado")<>0
+Add
+Expression constructor
+OK event generation
+ExpressionRecovery expressionNone
+Recovery expression
+find(/CERTIFICADOS_CLARO_BRASIL/zbx_valida_data_certificado["flexdev.aws.clarobrasil.mobi","Externo","07/07/2026"],#1,"like","OK")<>0
+Add
+Expression constructor
+PROBLEM event generation mode
+SingleMultiple
+OK event closes
+All problemsAll problems if tag values match
+Allow manual close
+
+Menu entry name
+Trigger URL
+Menu entry URL
+Description
+Verifica status do certificado.
+Gera alarme quando estiver expirado
+Enabled
+
+Tags
+Trigger tagsInherited and trigger tags
+Tags
+Name	Value	
+impacto
+SERVICO
+Remove
+solucionador
+{$SOLUCIONADOR_GA_CERTIFICADOS}
+Remove
+Add
+
+No campo descricao do iem de certificado criado ou atualizado, deve conter o ticket (PDST-xxxxxxxx)
