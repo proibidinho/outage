@@ -192,9 +192,11 @@
     # description = a do modelo + "Chamado Jira: <ticket>" (nova linha).
     # Só é avaliada quando PENDENTE (o modelo existe nesse caso).
     descricao_modelo: "{{ modelo.item.description | default('') | string | trim }}"
+    # quebra de linha real (YAML entre aspas duplas converte "\n" antes do Jinja)
+    quebra_linha: "\n"
     descricao_ticket: >-
       {{ descricao_modelo if ('Chamado Jira: ' ~ item.ticket) in descricao_modelo
-         else (descricao_modelo ~ ('\n' if descricao_modelo | length > 0 else '') ~ 'Chamado Jira: ' ~ item.ticket) }}
+         else (descricao_modelo ~ (quebra_linha if descricao_modelo | length > 0 else '') ~ 'Chamado Jira: ' ~ item.ticket) }}
     payload: >-
       {{ ({'hostid': zbx_hostid, 'name': nome, 'key_': chave} | combine(campos_modelo) | combine({'description': descricao_ticket})) if status == 'PENDENTE' else {} }}
   loop: "{{ certificados_para_criar }}"
@@ -313,7 +315,7 @@
       recovery_expression: 'find(/{{ zabbix_host_certificados }}/{{ item.key_ }},#1,"like","OK")<>0'
       # confirme a severidade desejada: not_classified | information |
       # warning | average | high | disaster
-      severity: not_classified
+      severity: average
       correlation_mode: all
       generate_multiple_events: false
       manual_close: false

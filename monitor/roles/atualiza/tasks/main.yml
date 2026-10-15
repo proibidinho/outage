@@ -157,10 +157,12 @@
     descricao_atual: "{{ encontrados[0].description | default('') | string | trim if encontrados | length == 1 else '' }}"
     # mantém o texto atual e acrescenta "Chamado Jira: <ticket>" em nova
     # linha; se o chamado já consta, não muda. Vazio quando não é PENDENTE.
+    # quebra de linha real (YAML entre aspas duplas converte "\n" antes do Jinja)
+    quebra_linha: "\n"
     nova_descricao: >-
       {{ '' if status != 'PENDENTE'
          else descricao_atual if ('Chamado Jira: ' ~ item.ticket) in descricao_atual
-         else (descricao_atual ~ ('\n' if descricao_atual | length > 0 else '') ~ 'Chamado Jira: ' ~ item.ticket) }}
+         else (descricao_atual ~ (quebra_linha if descricao_atual | length > 0 else '') ~ 'Chamado Jira: ' ~ item.ticket) }}
   loop: "{{ certificados_para_atualizar }}"
   loop_control:
     label: "{{ item.host }} ({{ item.tipo }})"
@@ -222,6 +224,7 @@
   vars:
     linha: "{{ item.0 }}"
     resp: "{{ item.1 }}"
+    quebra_linha: "\n"
     api_ok: >-
       {{ resp.json is defined
          and resp.json.error is not defined
@@ -237,7 +240,7 @@
          else 'ERRO' }}
     mensagem: >-
       {{ linha.mensagem if linha.status != 'PENDENTE'
-         else 'Simulação (aplicar_alteracoes=false): a key passaria para ' ~ linha.nova_chave ~ ' e a description ficaria: ' ~ (linha.nova_descricao | replace('\n', ' | ')) if status == 'SIMULADO'
+         else 'Simulação (aplicar_alteracoes=false): a key passaria para ' ~ linha.nova_chave ~ ' e a description ficaria: ' ~ (linha.nova_descricao | replace(quebra_linha, ' | ')) if status == 'SIMULADO'
          else 'Validade alterada de ' ~ linha.validade_anterior ~ ' para ' ~ linha.validade_solicitada ~ '. Chamado ' ~ linha.ticket ~ ' registrado na description.' if status == 'ATUALIZADO'
          else api_erro }}
   loop: "{{ zbx_plano | zip(zbx_update.results) | list }}"
