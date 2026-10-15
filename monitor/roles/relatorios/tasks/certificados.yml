@@ -1,0 +1,382 @@
+---
+# Relatório HTML de atualização/criação de certificados.
+# O e-mail é enviado tanto em execução real quanto em simulação.
+
+- name: Consolidar os resultados de certificados
+  ansible.builtin.set_fact:
+    relatorio_certificados: "{{ (resultado_atualizacao | default([])) + (resultado_criacao | default([])) }}"
+
+- name: Informar que não há certificados processados
+  ansible.builtin.debug:
+    msg: "Nenhum certificado foi processado; não há resultados para enviar."
+  when: relatorio_certificados | length == 0
+
+- name: Enviar relatório HTML de certificados
+  community.general.mail:
+    host: vip_smtp.claro.com.br
+    port: 25
+    from: coeeaiops@claro.com.br
+    to: "{{ email }}"
+    subject: >-
+      Relatório Certificados Zabbix - {{ ansible_date_time.date
+      }}{{ ' (SIMULAÇÃO)' if not zabbix_aplicar_alteracoes | bool else '' }}
+    subtype: html
+    body: "{{ lookup('template', 'corpo_email.html.j2') }}"
+  when: relatorio_certificados | length > 0
+
+# Exibe no output do job quais certificados foram tratados ou seriam
+# alterados/criados. Em simulação, os status SIMULADO indicam que nada
+# foi gravado no Zabbix, mas o plano e o e-mail são gerados normalmente.
+- name: OUTPUT | Certificados processados, alterados ou a criar
+  ansible.builtin.debug:
+    msg:
+      modo: "{{ 'APLICAÇÃO REAL' if zabbix_aplicar_alteracoes | bool else 'SIMULAÇÃO - nenhuma alteração gravada' }}"
+      operacao: "{{ item.operacao }}"
+      ticket: "{{ item.ticket }}"
+      host: "{{ item.host }}"
+      tipo: "{{ item.tipo }}"
+      validade_anterior: "{{ item.validade_anterior | default('') }}"
+      validade_solicitada: "{{ item.validade_solicitada }}"
+      status: "{{ item.status }}"
+      mensagem: "{{ item.mensagem | default('') }}"
+  loop: "{{ relatorio_certificados }}"
+  loop_control:
+    label: "{{ item.operacao }} {{ item.host }} ({{ item.tipo }})"
+
+# O e-mail é enviado antes de falhar o job, para que os resultados
+# também cheguem ao destinatário quando uma operação terminar em ERRO.
+- name: Falhar o job se alguma operação terminou em ERRO
+  ansible.builtin.fail:
+    msg: >-
+      {{ relatorio_certificados | selectattr('status', 'equalto', 'ERRO') | list | length }}
+      operação(ões) terminaram em ERRO. Veja o relatório enviado para {{ email }}.
+  when: relatorio_certificados | selectattr('status', 'equalto', 'ERRO') | list | length > 0
+
+
+================================================================
+
+ARQUIVO: ./roles/relatorios/templates/corpo_email.html.j2
+================================================================
+{% set fonte = "font-family:Arial,'Segoe UI',Helvetica,sans-serif;" %}
+{% set cabecalho = "background-color:#eef1f5;padding:8px 10px;border-bottom:1px solid #d5dae1;color:#3e4c59;font-weight:bold;font-size:13px;" %}
+{% set celula = "padding:7px 10px;border-bottom:1px solid #e4e7eb;color:#1f2933;font-size:14px;" %}
+{% set secao = "padding:18px 24px 6px 24px;font-size:12px;font-weight:bold;color:#5f6b7a;letter-spacing:1px;" %}
+{% set cor = "#1565c0" %}
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="pt-BR">
+
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Relatório Certificados Zabbix</title>
+</head>
+
+<body style="margin:0;padding:0;background-color:#f2f4f7;">
+
+<table role="presentation"
+       width="100%"
+       cellpadding="0"
+       cellspacing="0"
+       border="0"
+       bgcolor="#f2f4f7"
+       style="background-color:#f2f4f7;">
+
+<tr>
+<td align="center" style="padding:20px 10px;">
+
+<table role="presentation"
+       width="680"
+       cellpadding="0"
+       cellspacing="0"
+       border="0"
+       bgcolor="#ffffff"
+       style="width:680px;background-color:#ffffff;border:1px solid #d5dae1;{{ fonte }}">
+
+<tr>
+<td bgcolor="{{ cor }}"
+    style="background-color:{{ cor }};
+           padding:14px 24px;
+           {{ fonte }}
+           font-size:15px;
+           font-weight:bold;
+           color:#ffffff;
+           letter-spacing:1px;">
+
+CERTIFICADOS ZABBIX • JIRA → ZABBIX
+
+</td>
+</tr>
+
+<tr>
+<td style="padding:22px 24px 6px 24px;
+           {{ fonte }}
+           font-size:15px;
+           line-height:22px;
+           color:#1f2933;">
+
+<b>Processamento concluído.</b><br />
+Segue abaixo o resultado das operações e os certificados alterados ou previstos para alteração/criação no Zabbix.
+
+</td>
+</tr>
+
+<tr>
+<td style="{{ secao }}{{ fonte }}">
+RESUMO
+</td>
+</tr>
+
+<tr>
+<td style="padding:0 24px 6px 24px;">
+
+<table role="presentation"
+       width="100%"
+       cellpadding="0"
+       cellspacing="0"
+       border="0"
+       style="border-collapse:collapse;{{ fonte }}font-size:14px;">
+
+<tr>
+<td width="190" valign="top" style="width:190px;{{ celula }}color:#5f6b7a;">
+Chamados encontrados
+</td>
+<td valign="top" style="{{ celula }}">
+{{ tickets_certificados | length }}
+</td>
+</tr>
+
+<tr>
+<td width="190" valign="top" style="width:190px;{{ celula }}color:#5f6b7a;">
+Certificados para atualização
+</td>
+<td valign="top" style="{{ celula }}">
+{{ certificados_para_atualizar | length }}
+</td>
+</tr>
+
+<tr>
+<td width="190" valign="top" style="width:190px;{{ celula }}color:#5f6b7a;">
+Certificados para criação
+</td>
+<td valign="top" style="{{ celula }}">
+{{ certificados_para_criar | length }}
+</td>
+</tr>
+
+<tr>
+<td width="190" valign="top" style="width:190px;{{ celula }}color:#5f6b7a;">
+Total de certificados
+</td>
+<td valign="top" style="{{ celula }}">
+{{ (certificados_para_atualizar | length) + (certificados_para_criar | length) }}
+</td>
+</tr>
+
+</table>
+
+</td>
+</tr>
+
+{% for ticket in tickets_certificados %}
+
+<tr>
+<td style="{{ secao }}{{ fonte }}">
+CHAMADO {{ ticket.key }}
+</td>
+</tr>
+
+<tr>
+<td style="padding:0 24px 6px 24px;">
+
+<table role="presentation"
+       width="100%"
+       cellpadding="0"
+       cellspacing="0"
+       border="0"
+       style="border-collapse:collapse;{{ fonte }}font-size:14px;">
+
+<tr>
+<td width="190" valign="top" style="width:190px;{{ celula }}color:#5f6b7a;">
+Ticket
+</td>
+<td valign="top" style="{{ celula }}">
+{{ ticket.key }}
+</td>
+</tr>
+
+<tr>
+<td width="190" valign="top" style="width:190px;{{ celula }}color:#5f6b7a;">
+Resumo
+</td>
+<td valign="top" style="{{ celula }}">
+{{ ticket.fields.summary }}
+</td>
+</tr>
+
+<tr>
+<td width="190" valign="top" style="width:190px;{{ celula }}color:#5f6b7a;">
+Operação
+</td>
+<td valign="top" style="{{ celula }}">
+
+{% if ticket.key in (tickets_criacao | map(attribute='key') | list) %}
+CRIAÇÃO
+{% else %}
+ATUALIZAÇÃO
+{% endif %}
+
+</td>
+</tr>
+
+</table>
+
+</td>
+</tr>
+
+<tr>
+<td style="padding:0 24px 6px 24px;">
+
+<table role="presentation"
+       width="100%"
+       cellpadding="0"
+       cellspacing="0"
+       border="0"
+       style="border-collapse:collapse;{{ fonte }}font-size:14px;">
+
+<tr>
+<td style="{{ cabecalho }}">
+Host
+</td>
+
+<td width="90" style="{{ cabecalho }}">
+Tipo
+</td>
+
+<td width="130" style="{{ cabecalho }}">
+Validade
+</td>
+
+<td width="120" style="{{ cabecalho }}">
+Operação
+</td>
+</tr>
+
+{% for cert in (certificados_para_atualizar + certificados_para_criar) %}
+
+{% if cert.ticket == ticket.key %}
+
+<tr>
+
+<td valign="top" style="{{ celula }}">
+{{ cert.host }}
+</td>
+
+<td valign="top" style="{{ celula }}">
+{{ cert.tipo }}
+</td>
+
+<td valign="top" style="{{ celula }}">
+{{ cert.validade }}
+</td>
+
+<td valign="top" style="{{ celula }}">
+
+{% if cert.operacao == 'CRIACAO' %}
+<span style="color:#1565c0;font-weight:bold;">
+CRIAÇÃO
+</span>
+{% else %}
+<span style="color:#2e7d32;font-weight:bold;">
+ATUALIZAÇÃO
+</span>
+{% endif %}
+
+</td>
+
+</tr>
+
+{% endif %}
+
+{% endfor %}
+
+</table>
+
+</td>
+</tr>
+
+{% endfor %}
+
+<tr>
+<td style="{{ secao }}{{ fonte }}">
+RESULTADO DAS OPERAÇÕES NO ZABBIX
+</td>
+</tr>
+
+<tr>
+<td style="padding:0 24px 6px 24px;{{ fonte }}font-size:14px;line-height:20px;color:#1f2933;">
+<b>Modo:</b>
+{% if zabbix_aplicar_alteracoes | bool %}
+APLICAÇÃO REAL — alterações enviadas ao Zabbix.
+{% else %}
+SIMULAÇÃO — nenhuma alteração foi gravada; os itens abaixo indicam o que seria alterado/criado.
+{% endif %}
+<br />
+<b>Data/Hora:</b> {{ ansible_date_time.date }} {{ ansible_date_time.time }}
+<br />
+<b>Total processado:</b> {{ relatorio_certificados | length }}
+</td>
+</tr>
+
+<tr>
+<td style="padding:0 24px 16px 24px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+       style="border-collapse:collapse;{{ fonte }}font-size:13px;">
+<tr>
+<td style="{{ cabecalho }}">Operação</td>
+<td style="{{ cabecalho }}">Chamado</td>
+<td style="{{ cabecalho }}">Host</td>
+<td style="{{ cabecalho }}">Tipo</td>
+<td style="{{ cabecalho }}">Validade anterior</td>
+<td style="{{ cabecalho }}">Validade solicitada</td>
+<td style="{{ cabecalho }}">Status</td>
+</tr>
+{% for linha in relatorio_certificados %}
+<tr>
+<td style="{{ celula }}">{{ linha.operacao | default('') }}</td>
+<td style="{{ celula }}">{{ linha.ticket | default('') }}</td>
+<td style="{{ celula }}">{{ linha.host | default('') }}</td>
+<td style="{{ celula }}">{{ linha.tipo | default('') }}</td>
+<td style="{{ celula }}">{{ linha.validade_anterior | default('—') }}</td>
+<td style="{{ celula }}">{{ linha.validade_solicitada | default('') }}</td>
+<td style="{{ celula }}"><b>{{ linha.status | default('') }}</b><br />{{ linha.mensagem | default('') }}</td>
+</tr>
+{% endfor %}
+</table>
+</td>
+</tr>
+
+<tr>
+<td style="padding:22px 24px 22px 24px;
+           {{ fonte }}
+           font-size:12px;
+           line-height:18px;
+           color:#7b8794;
+           border-top:1px solid #e4e7eb;">
+
+Este é um e-mail automático gerado pela automação de atualização de certificados Jira → Zabbix.
+
+</td>
+</tr>
+
+</table>
+
+</td>
+</tr>
+
+</table>
+
+</body>
+</html>
