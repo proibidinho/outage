@@ -74,14 +74,6 @@ ARQUIVO: ./playbook.yml
           Use algo como PDST-123456, ou deixe em branco para buscar todos.
         quiet: true
 
-    - name: Validar que o Zabbix está habilitado
-      ansible.builtin.assert:
-        that:
-          - zabbix_habilitado | default(true) | bool
-        fail_msg: >-
-          Este playbook só trabalha com o Zabbix; zabbix_habilitado
-          não pode ser false.
-        quiet: true
 
   roles:
     # Cria o host virtual usado pelas tasks do Zabbix
@@ -99,10 +91,10 @@ ARQUIVO: ./playbook.yml
     - role: cria
       when: certificados_para_criar | length > 0
 
-    # Gera o CSV e envia para o e-mail informado na Survey
-    # (tasks/certificados.yml)
+    # Gera e envia o relatório HTML usando templates/corpo_email.html.j2
+    # e exibe os certificados processados no output final do job.
     - role: relatorios
-      tasks_from: certificados
+      # tasks_from: certificados
 
 
 ================================================================
@@ -1010,109 +1002,61 @@ ARQUIVO: ./roles/inventory/tasks/main.yml
   when: zabbix_habilitado
 
 ================================================================
-ARQUIVO: ./roles/relatorios/tasks/certificados.yml
+ARQUIVO: ./roles/relatorios/tasks/main.yml
 ================================================================
 ---
-# ============================================================
-# Relatório dos certificados (atualização + criação).
-#
-# Chamado pelo playbook com "tasks_from: certificados". É um
-# arquivo à parte: o tasks/main.yml (GMUDs / Outages / Dynatrace)
-# não é usado nem alterado, e nenhum dado de GMUD entra aqui.
-#
-# Entrada: resultado_atualizacao e resultado_criacao (geradas
-# pelas roles atualiza e cria; podem não existir se a role não
-# rodou) e a variável email (Survey do AAP).
-#
-# CSV: delimitador ";" (Excel em português abre direto) e UTF-8
-# com BOM (acentos corretos no Excel). Todos os campos entre aspas,
-# com aspas internas duplicadas (RFC 4180). Para usar vírgula,
-# informe csv_delimitador: ",".
-# ============================================================
+# Relatório HTML de atualização/criação de certificados.
+# O e-mail é enviado tanto em execução real quanto em simulação.
 
 - name: Consolidar os resultados de certificados
   ansible.builtin.set_fact:
     relatorio_certificados: "{{ (resultado_atualizacao | default([])) + (resultado_criacao | default([])) }}"
 
-- name: Informar que não há o que reportar
+- name: Informar que não há certificados processados
   ansible.builtin.debug:
-    msg: "Nenhum certificado foi processado; relatório não gerado e e-mail não enviado."
+    msg: "Nenhum certificado foi processado; não há resultados para enviar."
   when: relatorio_certificados | length == 0
 
-- name: Gerar e enviar o relatório
+- name: Enviar relatório HTML de certificados
+  community.general.mail:
+    host: vip_smtp.claro.com.br
+    port: 25
+    from: coeeaiops@claro.com.br
+    to: "{{ email }}"
+    subject: >-
+      Relatório Certificados Zabbix - {{ ansible_date_time.date
+      }}{{ ' (SIMULAÇÃO)' if not zabbix_aplicar_alteracoes | bool else '' }}
+    subtype: html
+    body: "{{ lookup('template', 'corpo_email.html.j2') }}"
   when: relatorio_certificados | length > 0
-  vars:
-    csv_colunas:
-      - operacao
-      - ticket
-      - host
-      - tipo
-      - itemid
-      - validade_anterior
-      - validade_solicitada
-      - status
-      - mensagem
-    csv_sep: "{{ csv_delimitador | default(';') }}"
-    relatorio_csv: "/tmp/relatorio_certificados_{{ ansible_date_time.iso8601_basic_short }}.csv"
-  block:
-    - name: Gravar o CSV
-      ansible.builtin.copy:
-        dest: "{{ relatorio_csv }}"
-        mode: "0600"
-        content: |-
-          {{ '﻿' ~ (csv_colunas | join(csv_sep)) ~ '\n' -}}
-          {% for linha in relatorio_certificados -%}
-          {% for col in csv_colunas -%}
-          "{{ linha[col] | default('') | string | replace('\n', ' ') | replace('"', '""') }}"{{ csv_sep if not loop.last else '' }}
-          {%- endfor -%}
-          {{ '\n' }}
-          {%- endfor %}
 
-    - name: EMAIL | Enviar relatório de certificados
-      community.general.mail:
-        host: vip_smtp.claro.com.br
-        port: 25
-        from: coeeaiops@claro.com.br
-        to: "{{ email }}"
-        subject: >-
-          Relatorio Certificados Zabbix -
-          {{ ansible_date_time.date }}{{ ' (SIMULACAO)' if not zabbix_aplicar_alteracoes | bool else '' }}
-        subtype: plain
-        attach:
-          - "{{ relatorio_csv }}"
-        body: |
-          Prezado(a),
+# Exibe no output do job quais certificados foram tratados ou seriam
+# alterados/criados. Em simulação, os status SIMULADO indicam que nada
+# foi gravado no Zabbix, mas o plano e o e-mail são gerados normalmente.
+- name: OUTPUT | Certificados processados, alterados ou a criar
+  ansible.builtin.debug:
+    msg:
+      modo: "{{ 'APLICAÇÃO REAL' if zabbix_aplicar_alteracoes | bool else 'SIMULAÇÃO - nenhuma alteração gravada' }}"
+      operacao: "{{ item.operacao }}"
+      ticket: "{{ item.ticket }}"
+      host: "{{ item.host }}"
+      tipo: "{{ item.tipo }}"
+      validade_anterior: "{{ item.validade_anterior | default('') }}"
+      validade_solicitada: "{{ item.validade_solicitada }}"
+      status: "{{ item.status }}"
+      mensagem: "{{ item.mensagem | default('') }}"
+  loop: "{{ relatorio_certificados }}"
+  loop_control:
+    label: "{{ item.operacao }} {{ item.host }} ({{ item.tipo }})"
 
-          Segue em anexo o relatório dos certificados processados pela automação (Jira -> Zabbix).
-
-          Modo: {{ 'APLICADO (alterações realizadas no Zabbix)' if zabbix_aplicar_alteracoes | bool else 'SIMULAÇÃO (nenhuma alteração foi feita no Zabbix)' }}
-          Data/Hora: {{ ansible_date_time.date }} {{ ansible_date_time.time }}
-          Total de certificados processados: {{ relatorio_certificados | length }}
-
-          Resumo por operação e status:
-          {% for operacao, itens in relatorio_certificados | groupby('operacao') %}
-          {{ operacao }}
-          {% for status, grupo in itens | groupby('status') %}
-            - {{ status }}: {{ grupo | length }}
-          {% endfor %}
-          {% endfor %}
-
-          Este é um e-mail automático gerado pelo Ansible.
-
-    - name: Remover o CSV temporário
-      ansible.builtin.file:
-        path: "{{ relatorio_csv }}"
-        state: absent
-
-    # O e-mail sai mesmo com erros (o relatório precisa chegar); depois
-    # o job é marcado como falho para quem acompanha o AAP perceber.
-    - name: Falhar o job se alguma operação terminou em ERRO
-      ansible.builtin.fail:
-        msg: >-
-          {{ relatorio_certificados | selectattr('status', 'equalto', 'ERRO') | list | length }}
-          operação(ões) terminaram em ERRO. Veja o relatório enviado para {{ email }}.
-      when: relatorio_certificados | selectattr('status', 'equalto', 'ERRO') | list | length > 0
-
+# O e-mail é enviado antes de falhar o job, para que os resultados
+# também cheguem ao destinatário quando uma operação terminar em ERRO.
+- name: Falhar o job se alguma operação terminou em ERRO
+  ansible.builtin.fail:
+    msg: >-
+      {{ relatorio_certificados | selectattr('status', 'equalto', 'ERRO') | list | length }}
+      operação(ões) terminaram em ERRO. Veja o relatório enviado para {{ email }}.
+  when: relatorio_certificados | selectattr('status', 'equalto', 'ERRO') | list | length > 0
 
 ================================================================
 ARQUIVO: ./roles/relatorios/templates/corpo_email.html.j2
@@ -1178,7 +1122,7 @@ CERTIFICADOS ZABBIX • JIRA → ZABBIX
            color:#1f2933;">
 
 <b>Processamento concluído.</b><br />
-Segue abaixo o resultado da descoberta de chamados e certificados identificados no Jira.
+Segue abaixo o resultado das operações e os certificados alterados ou previstos para alteração/criação no Zabbix. NÃO SE ESQUEÇA DE FECHAR O CHAMADO!!
 
 </td>
 </tr>
@@ -1370,6 +1314,55 @@ ATUALIZAÇÃO
 {% endfor %}
 
 <tr>
+<td style="{{ secao }}{{ fonte }}">
+RESULTADO DAS OPERAÇÕES NO ZABBIX
+</td>
+</tr>
+
+<tr>
+<td style="padding:0 24px 6px 24px;{{ fonte }}font-size:14px;line-height:20px;color:#1f2933;">
+<b>Modo:</b>
+{% if zabbix_aplicar_alteracoes | bool %}
+APLICAÇÃO REAL — alterações enviadas ao Zabbix. LEMBRE-SE: O ANSIBLE NÃO FECHA O CHAMADO!!
+{% else %}
+SIMULAÇÃO — nenhuma alteração foi gravada; os itens abaixo indicam o que seria alterado/criado.
+{% endif %}
+<br />
+<b>Data/Hora:</b> {{ ansible_date_time.date }} {{ ansible_date_time.time }}
+<br />
+<b>Total processado:</b> {{ relatorio_certificados | length }}
+</td>
+</tr>
+
+<tr>
+<td style="padding:0 24px 16px 24px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+       style="border-collapse:collapse;{{ fonte }}font-size:13px;">
+<tr>
+<td style="{{ cabecalho }}">Operação</td>
+<td style="{{ cabecalho }}">Chamado</td>
+<td style="{{ cabecalho }}">Host</td>
+<td style="{{ cabecalho }}">Tipo</td>
+<td style="{{ cabecalho }}">Validade anterior</td>
+<td style="{{ cabecalho }}">Validade solicitada</td>
+<td style="{{ cabecalho }}">Status</td>
+</tr>
+{% for linha in relatorio_certificados %}
+<tr>
+<td style="{{ celula }}">{{ linha.operacao | default('') }}</td>
+<td style="{{ celula }}">{{ linha.ticket | default('') }}</td>
+<td style="{{ celula }}">{{ linha.host | default('') }}</td>
+<td style="{{ celula }}">{{ linha.tipo | default('') }}</td>
+<td style="{{ celula }}">{{ linha.validade_anterior | default('—') }}</td>
+<td style="{{ celula }}">{{ linha.validade_solicitada | default('') }}</td>
+<td style="{{ celula }}"><b>{{ linha.status | default('') }}</b><br />{{ linha.mensagem | default('') }}</td>
+</tr>
+{% endfor %}
+</table>
+</td>
+</tr>
+
+<tr>
 <td style="padding:22px 24px 22px 24px;
            {{ fonte }}
            font-size:12px;
@@ -1391,3 +1384,4 @@ Este é um e-mail automático gerado pela automação de atualização de certif
 
 </body>
 </html>
+
