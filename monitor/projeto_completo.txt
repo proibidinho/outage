@@ -1,8 +1,7 @@
 
-
-############################################################
-# ./playbook.yml
-############################################################
+================================================================
+ARQUIVO: ./playbook.yml
+================================================================
 ---
 - name: Atualiza e cria alertas de certificado no Zabbix baseado em chamados de GA
   hosts: localhost
@@ -18,6 +17,7 @@
     #jira_resumo_atualizacao: "Atualização de Alerta de Certificado - Zabbix"
     jira_resumo_atualizacao: "Atualização de alerta"
     jira_resumo_criacao: "Criação de Alerta de Certificado - Zabbix"
+
 
     # ----------------------------------------------------------
     # Zabbix: host e padrão de chave dos itens de certificado.
@@ -43,6 +43,13 @@
     # ----------------------------------------------------------
     zabbix_aplicar_alteracoes: "{{ aplicar_alteracoes | default(false) | bool }}"
 
+    # ----------------------------------------------------------
+    # Survey (opcional): número do chamado, ex.: PDST-123456.
+    # Em branco -> busca todos os chamados em aberto (comportamento
+    # de sempre). Preenchido -> processa SOMENTE esse chamado.
+    # ----------------------------------------------------------
+    jira_chamado: "{{ chamado | default('') | string | trim | upper }}"
+
   pre_tasks:
     # Falha antes de qualquer alteração no Zabbix, para não alterar
     # nada e só então descobrir que o relatório não tem destinatário.
@@ -55,6 +62,16 @@
         fail_msg: >-
           Informe a variável "email" na Survey do AAP com o endereço que
           receberá o relatório (ex.: usuario@empresa.com).
+        quiet: true
+
+    # Formato do chamado (evita montar uma JQL inválida ou com texto estranho).
+    - name: Validar o número do chamado (variável chamado da Survey, opcional)
+      ansible.builtin.assert:
+        that:
+          - jira_chamado | length == 0 or jira_chamado is match('^[A-Z][A-Z0-9_]*-[0-9]+$')
+        fail_msg: >-
+          O chamado informado ("{{ jira_chamado }}") não tem o formato esperado.
+          Use algo como PDST-123456, ou deixe em branco para buscar todos.
         quiet: true
 
     - name: Validar que o Zabbix está habilitado
@@ -83,15 +100,14 @@
       when: certificados_para_criar | length > 0
 
     # Gera o CSV e envia para o e-mail informado na Survey
-    # (tasks/certificados.yml; o fluxo de GMUDs em tasks/main.yml
-    # não é tocado).
+    # (tasks/certificados.yml)
     - role: relatorios
       tasks_from: certificados
 
 
-############################################################
-# ./roles/atualiza/tasks/main.yml
-############################################################
+================================================================
+ARQUIVO: ./roles/atualiza/tasks/main.yml
+================================================================
 ---
 # ============================================================
 # Role atualiza: altera a validade (data dentro da key) de itens
@@ -115,7 +131,9 @@
 #   SIMULADO        aplicar_alteracoes = false (nada foi gravado)
 #   JA_ATUALIZADO   o item já está com a validade pedida
 #   NAO_ENCONTRADO  nenhum item para host + tipo
-#   AMBIGUO         mais de um item para host + tipo (não altera)
+#   AMBIGUO         mais de um item para host + tipo e não há exatamente
+#                   um Enabled (não altera). Se houver exatamente um
+#                   Enabled entre vários, é ele que é atualizado.
 #   CONFLITO        chamados pedem validades diferentes para o
 #                   mesmo certificado (não altera)
 #   TIPO_INVALIDO   descrição do chamado sem Externo/Interno
@@ -148,6 +166,7 @@
           - itemid
           - name
           - key_
+          - status
       auth: "{{ zabbix_api_token }}"
       id: 1
     validate_certs: "{{ zabbix_validate_certs }}"
@@ -171,7 +190,7 @@
       {%- for i in zbx_itens.json.result -%}
       {%- set p = i.key_ | regex_findall(zabbix_chave_regex) -%}
       {%- if p -%}
-      {%- set r.lista = r.lista + [{'itemid': i.itemid, 'name': i.name, 'key_': i.key_, 'host': p[0][0] | lower, 'tipo': p[0][1] | lower, 'data': p[0][2]}] -%}
+      {%- set r.lista = r.lista + [{'itemid': i.itemid, 'name': i.name, 'key_': i.key_, 'status': i.status | string, 'host': p[0][0] | lower, 'tipo': p[0][1] | lower, 'data': p[0][2]}] -%}
       {%- endif -%}
       {%- endfor -%}
       {{ r.lista }}
@@ -197,11 +216,16 @@
       nova_chave: "{{ nova_chave }}"
   vars:
     # itens do Zabbix com o mesmo host + tipo (comparação exata na key)
-    encontrados: >-
+    candidatos: >-
       {{ zbx_certs
          | selectattr('host', 'equalto', item.host | lower)
          | selectattr('tipo', 'equalto', item.tipo | lower)
          | list }}
+    # havendo mais de um candidato, desempata ficando só com o(s) item(ns)
+    # Enabled (na API: status "0"; "1" = Disabled)
+    encontrados: >-
+      {{ candidatos if candidatos | length <= 1
+         else candidatos | selectattr('status', 'equalto', '0') | list }}
     # validades diferentes pedidas para o mesmo host + tipo (todos os chamados)
     datas_pedidas: >-
       {{ certificados_para_atualizar
@@ -213,15 +237,15 @@
     status: >-
       {{ 'TIPO_INVALIDO' if (item.tipo | lower) not in ['externo', 'interno']
          else 'CONFLITO' if datas_pedidas | length > 1
-         else 'NAO_ENCONTRADO' if encontrados | length == 0
-         else 'AMBIGUO' if encontrados | length > 1
+         else 'NAO_ENCONTRADO' if candidatos | length == 0
+         else 'AMBIGUO' if encontrados | length != 1
          else 'JA_ATUALIZADO' if encontrados[0].data == item.validade
          else 'PENDENTE' }}
     mensagem: >-
       {{ 'Tipo não identificado na descrição do chamado (esperado Externo ou Interno).' if status == 'TIPO_INVALIDO'
          else 'Chamados pedem validades diferentes para o mesmo certificado (' ~ (datas_pedidas | join(', ')) ~ '). Nada foi alterado.' if status == 'CONFLITO'
          else 'Nenhum item encontrado no Zabbix para este host e tipo. Para cadastrar, use um chamado de criação.' if status == 'NAO_ENCONTRADO'
-         else 'Mais de um item corresponde (itemids: ' ~ (encontrados | map(attribute='itemid') | join(', ')) ~ '). Nada foi alterado.' if status == 'AMBIGUO'
+         else 'Mais de um item corresponde (itemids: ' ~ (candidatos | map(attribute='itemid') | join(', ')) ~ ') e não há exatamente um Enabled. Nada foi alterado.' if status == 'AMBIGUO'
          else 'O item já está com a validade solicitada.' if status == 'JA_ATUALIZADO'
          else 'Aguardando atualização.' }}
     # só substitui a data; o restante da key é mantido como está
@@ -315,9 +339,9 @@
     resultado_atualizacao: "{{ zbx_resultado_loop.results | map(attribute='msg') | list }}"
 
 
-############################################################
-# ./roles/cria/tasks/main.yml
-############################################################
+================================================================
+ARQUIVO: ./roles/cria/tasks/main.yml
+================================================================
 ---
 # ============================================================
 # Role cria: cadastra itens NOVOS de certificado no host
@@ -339,7 +363,7 @@
 #   SIMULADO       aplicar_alteracoes = false (nada foi gravado)
 #   JA_EXISTE      já há item para host + tipo (não cria; para mudar
 #                  a data use chamado de atualização)
-#   SEM_MODELO     não há item-modelo do mesmo tipo no host, ou o nome
+#   SEM_MODELO     não há item-modelo Enabled do mesmo tipo no host, ou o nome
 #                  dele não permite derivar o nome do novo item
 #   CONFLITO       chamados pedem validades diferentes para o mesmo
 #                  certificado (não cria)
@@ -460,10 +484,12 @@
          | selectattr('host', 'equalto', item.host | lower)
          | selectattr('tipo', 'equalto', item.tipo | lower)
          | list }}
-    # item-modelo: primeiro item (menor itemid) do mesmo tipo
+    # item-modelo: primeiro item Enabled (menor itemid) do mesmo tipo.
+    # Só Enabled, porque o status do modelo é copiado para o item novo.
     modelo: >-
       {{ zbx_certs
          | selectattr('tipo', 'equalto', item.tipo | lower)
+         | selectattr('item.status', 'equalto', '0')
          | first
          | default({}) }}
     # o nome do modelo precisa conter o host para podermos trocá-lo
@@ -485,7 +511,7 @@
       {{ 'Tipo não identificado na descrição do chamado (esperado Externo ou Interno).' if status == 'TIPO_INVALIDO'
          else 'Chamados pedem validades diferentes para o mesmo certificado (' ~ (datas_pedidas | join(', ')) ~ '). Nada foi criado.' if status == 'CONFLITO'
          else 'Já existe item para este host e tipo (itemid ' ~ existentes[0].itemid ~ ', validade ' ~ existentes[0].data ~ '). Nada foi criado; para mudar a data use um chamado de atualização.' if status == 'JA_EXISTE'
-         else 'Sem item-modelo do tipo ' ~ item.tipo ~ ' no host, ou o nome do modelo não contém o host. Nada foi criado.' if status == 'SEM_MODELO'
+         else 'Sem item-modelo Enabled do tipo ' ~ item.tipo ~ ' no host, ou o nome do modelo não contém o host. Nada foi criado.' if status == 'SEM_MODELO'
          else 'Aguardando criação.' }}
     nome: >-
       {{ modelo.item.name | replace(modelo.host_orig, item.host) | replace(modelo.data, item.validade) if status == 'PENDENTE' else '' }}
@@ -585,9 +611,9 @@
     resultado_criacao: "{{ zbx_resultado_loop.results | map(attribute='msg') | list }}"
 
 
-############################################################
-# ./roles/cria/vars/main.yml
-############################################################
+================================================================
+ARQUIVO: ./roles/cria/vars/main.yml
+================================================================
 ---
 # ============================================================
 # Atributos copiados do item-modelo ao criar um item novo.
@@ -617,9 +643,9 @@ cria_campos_modelo:
   - preprocessing
 
 
-############################################################
-# ./roles/descoberta/tasks/main.yml
-############################################################
+================================================================
+ARQUIVO: ./roles/descoberta/tasks/main.yml
+================================================================
 # ============================================================
 # 1. Buscar chamados candidatos
 #
@@ -642,10 +668,14 @@ cria_campos_modelo:
     body_format: json
     body:
       jql: >-
+        {% if jira_chamado | length > 0 %}
+        key = {{ jira_chamado }}
+        {% else %}
         project = {{ projeto_jira }}
         AND (summary ~ "\"{{ jira_resumo_atualizacao }}\""
         OR summary ~ "\"{{ jira_resumo_criacao }}\"")
         AND statusCategory != Done
+        {% endif %}
       maxResults: 1000
       fields:
         - summary
@@ -656,8 +686,10 @@ cria_campos_modelo:
   environment: "{{ proxy_env }}"
 
 # ============================================================
-# 2. Manter somente chamados válidos (summary exatamente igual
-#    a um dos dois resumos)
+# 2. Manter somente chamados válidos. O resumo (summary) do chamado
+#    precisa CONTER o texto de jira_resumo_atualizacao ou de
+#    jira_resumo_criacao (comparação tolerante, explicada abaixo). Isso decide se o chamado é de
+#    atualização ou de criação.
 # ============================================================
 
 # ============================================================
@@ -673,16 +705,37 @@ cria_campos_modelo:
 # ============================================================
 
 # CORREÇÃO: antes o filtro comparava com 'Atualização de alerta',
-# texto diferente do resumo usado na JQL, então nenhum chamado
-# passava. Agora o filtro usa as mesmas variáveis da JQL.
+# texto diferente do resumo usado na JQL. Agora o filtro usa as mesmas
+# variáveis da JQL. A comparação é tolerante a detalhes que não mudam o
+# sentido: maiúsculas/minúsculas, espaços repetidos ou "não separáveis" e
+# tipo de hífen/pontuação ("-", "–", "—"). Os dois textos são normalizados
+# (minúsculas, tudo que não é letra/número vira um único espaço) e o resumo
+# do chamado precisa conter o texto da variável. "Atualização de alerta"
+# (resumo antigo, sem "de Certificado - Zabbix") NÃO casa.
 - name: Selecionar tickets de atualização e de criação de alerta
   ansible.builtin.set_fact:
-    tickets_certificados: >-
-      {{
-        jira_search.json.issues
-        | selectattr('fields.summary', 'in', [jira_resumo_atualizacao, jira_resumo_criacao])
-        | list
-      }}
+    tickets_atualizacao: >-
+      {%- set alvo = jira_resumo_atualizacao | lower | regex_replace('[\\W_]+', ' ') | trim -%}
+      {%- set r = namespace(lista=[]) -%}
+      {%- for t in jira_search.json.issues -%}
+      {%- if alvo in (t.fields.summary | default('') | lower | regex_replace('[\\W_]+', ' ') | trim) -%}
+      {%- set r.lista = r.lista + [t] -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ r.lista }}
+    tickets_criacao: >-
+      {%- set alvo = jira_resumo_criacao | lower | regex_replace('[\\W_]+', ' ') | trim -%}
+      {%- set r = namespace(lista=[]) -%}
+      {%- for t in jira_search.json.issues -%}
+      {%- if alvo in (t.fields.summary | default('') | lower | regex_replace('[\\W_]+', ' ') | trim) -%}
+      {%- set r.lista = r.lista + [t] -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ r.lista }}
+
+- name: Juntar os tickets selecionados
+  ansible.builtin.set_fact:
+    tickets_certificados: "{{ tickets_atualizacao + tickets_criacao }}"
 
 # A JQL aproximada pode trazer chamados parecidos; avisa quais foram ignorados.
 - name: Avisar sobre chamados retornados pela busca e ignorados
@@ -691,11 +744,21 @@ cria_campos_modelo:
   loop: >-
     {{
       jira_search.json.issues
-      | rejectattr('fields.summary', 'in', [jira_resumo_atualizacao, jira_resumo_criacao])
+      | rejectattr('key', 'in', tickets_certificados | map(attribute='key') | list)
       | list
     }}
   loop_control:
     label: "{{ item.key }}"
+
+# Se a Survey informou o chamado e ele não foi aproveitado, diz o motivo provável.
+- name: Avisar quando o chamado informado na Survey não foi aproveitado
+  ansible.builtin.debug:
+    msg: >-
+      O chamado {{ jira_chamado }} não foi encontrado ou o resumo dele não contém
+      "{{ jira_resumo_atualizacao }}" nem "{{ jira_resumo_criacao }}".
+  when:
+    - jira_chamado | length > 0
+    - tickets_certificados | length == 0
 
 # ============================================================
 # 3. Mostrar resultado
@@ -723,11 +786,15 @@ cria_campos_modelo:
 # ============================================================
 # 4. Extrair certificados da descrição (ADF)
 #
-# Extração ADF preservada. Mudanças:
-#   - cada certificado agora carrega 'ticket' e 'operacao'
-#     (ATUALIZACAO ou CRIACAO, conforme o summary do chamado);
-#   - o resultado vai para certificados_jira, que no passo 5 é
-#     separado nas duas listas consumidas pelas roles.
+# 4a. Esquema "tipo + data + hosts em lista com marcadores": extração
+#     ADF preservada. Vale para chamados de atualização e também para
+#     criação, caso o corpo siga o mesmo esquema. Cada certificado
+#     carrega 'ticket' e 'operacao' (conforme o summary do chamado).
+#     Resultado em certificados_jira.
+# 4b. Esquema "Rótulo: valor" (chamados de criação): extração própria,
+#     logo abaixo, que lê parágrafos e também itens de lista.
+#     Resultado em certificados_criacao_jira.
+# Um mesmo chamado só gera certificados por um dos esquemas.
 # ============================================================
 
 - name: Inicializar lista de certificados
@@ -740,7 +807,7 @@ cria_campos_modelo:
       {% set resultado = namespace(certificados=[]) %}
       {% for ticket in tickets_certificados | default([]) %}
       {% set estado = namespace(validade='', tipo='') %}
-      {% set operacao = 'CRIACAO' if ticket.fields.summary == jira_resumo_criacao else 'ATUALIZACAO' %}
+      {% set operacao = 'CRIACAO' if ticket.key in (tickets_criacao | map(attribute='key') | list) else 'ATUALIZACAO' %}
       {% for bloco in ticket.fields.description.content | default([]) %}
       {% if bloco.type == 'paragraph' %}
       {% set texto = bloco.content | default([])
@@ -790,6 +857,92 @@ cria_campos_modelo:
   ansible.builtin.set_fact:
     certificados_jira: "{{ certificados_jira | from_yaml }}"
 
+# ------------------------------------------------------------
+# 4b. Chamados de CRIAÇÃO. O corpo vem assim:
+#
+#   Nome completo do certificado: clarocustodioa.claro.com.br
+#   Tipo de certificado: Interno
+#   Data de renovação: 06/10/2027
+#
+# Um chamado pode ter VÁRIOS blocos desse tipo (um certificado por
+# bloco). Cada linha "Nome ...:" abre um novo certificado; o "Tipo de
+# certificado" e a "Data de renovação" seguintes pertencem a ele. O bloco
+# fecha quando começa o próximo "Nome" ou a descrição termina.
+#
+# As linhas podem chegar como parágrafos separados (Formato A) ou como um
+# único parágrafo com quebras de linha (hardBreak no ADF, Formato B, que
+# vem precedido de um parágrafo "Certificado Novo" e com o rótulo
+# "Nome dos certificados:"). Os dois são tratados. O rótulo de host é
+# qualquer um que comece com "Nome"; os demais rótulos são reconhecidos
+# pelo começo (não dependem de acento). "*." no início do host vira
+# "star.", igual à atualização. Bloco sem host ou sem data válida não gera
+# certificado (e o chamado sem nenhum certificado é avisado na task seguinte).
+# ------------------------------------------------------------
+- name: Extrair certificado dos chamados de criação
+  ansible.builtin.set_fact:
+    certificados_criacao_jira: >-
+      {%- set resultado = namespace(certificados=[]) -%}
+      {%- for ticket in tickets_criacao | default([]) -%}
+      {%- set cert = namespace(host='', tipo='', validade='') -%}
+      {%- set pars = namespace(lista=[]) -%}
+      {%- for bloco in ticket.fields.description.content | default([]) -%}
+      {%- if bloco.type == 'paragraph' -%}
+      {%- set pars.lista = pars.lista + [bloco] -%}
+      {%- elif bloco.type in ['bulletList', 'orderedList'] -%}
+      {%- for li in bloco.content | default([]) -%}
+      {%- for pg in li.content | default([]) if pg.type == 'paragraph' -%}
+      {%- set pars.lista = pars.lista + [pg] -%}
+      {%- endfor -%}
+      {%- endfor -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- set pares = namespace(lista=[]) -%}
+      {%- for bloco in pars.lista -%}
+      {%- set t = namespace(texto='') -%}
+      {%- for no in bloco.content | default([]) -%}
+      {%- if no.type == 'text' -%}
+      {%- set t.texto = t.texto ~ no.text -%}
+      {%- elif no.type == 'hardBreak' -%}
+      {%- set t.texto = t.texto ~ '\n' -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- for linha in t.texto.split('\n') if ':' in linha -%}
+      {%- set pares.lista = pares.lista + [{'rotulo': linha.split(':', 1)[0] | trim | lower, 'valor': linha.split(':', 1)[1] | trim}] -%}
+      {%- endfor -%}
+      {%- endfor -%}
+      {#- par final "nome" vazio: força o fechamento do último bloco -#}
+      {%- set pares.lista = pares.lista + [{'rotulo': 'nome', 'valor': ''}] -%}
+      {%- for par in pares.lista -%}
+      {%- if par.rotulo.startswith('nome') -%}
+      {%- if cert.host -%}
+      {%- if cert.validade -%}
+      {%- set resultado.certificados = resultado.certificados + [{'ticket': ticket.key, 'operacao': 'CRIACAO', 'host': cert.host | regex_replace('^\\*\\.', 'star.'), 'tipo': cert.tipo, 'validade': cert.validade}] -%}
+      {%- endif -%}
+      {%- set cert.tipo = '' -%}
+      {%- set cert.validade = '' -%}
+      {%- endif -%}
+      {%- set cert.host = par.valor -%}
+      {%- elif par.rotulo.startswith('tipo de certificado') -%}
+      {%- set cert.tipo = 'Externo' if par.valor | upper == 'EXTERNO' else 'Interno' if par.valor | upper in ['INTERNO', 'INTERNOS'] else '' -%}
+      {%- elif par.rotulo.startswith('data de renova') and par.valor is match('^[0-9]{2}/[0-9]{2}/[0-9]{4}$') -%}
+      {%- set cert.validade = par.valor -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- endfor -%}
+      {{ resultado.certificados }}
+
+- name: Avisar sobre chamados de criação sem certificado reconhecido
+  ansible.builtin.debug:
+    msg: "Chamado {{ item.key }} ignorado: não foi possível ler host e data de renovação válidos da descrição."
+  loop: >-
+    {{
+      tickets_criacao
+      | rejectattr('key', 'in', (certificados_jira + certificados_criacao_jira) | map(attribute='ticket') | list)
+      | list
+    }}
+  loop_control:
+    label: "{{ item.key }}"
+
 # ============================================================
 # 5. Separar atualização x criação (nunca se misturam).
 #    certificados_para_atualizar mantém o nome original.
@@ -799,24 +952,24 @@ cria_campos_modelo:
 - name: Separar certificados de atualização e de criação
   ansible.builtin.set_fact:
     certificados_para_atualizar: "{{ certificados_jira | selectattr('operacao', 'equalto', 'ATUALIZACAO') | unique | list }}"
-    certificados_para_criar: "{{ certificados_jira | selectattr('operacao', 'equalto', 'CRIACAO') | unique | list }}"
+    certificados_para_criar: "{{ (certificados_jira | selectattr('operacao', 'equalto', 'CRIACAO') | list + certificados_criacao_jira) | unique | list }}"
 
-- name: Exibir certificados encontrados
-  ansible.builtin.debug:
-    msg:
-      operacao: "{{ item.operacao }}"
-      ticket: "{{ item.ticket }}"
-      host: "{{ item.host }}"
-      tipo: "{{ item.tipo }}"
-      validade: "{{ item.validade }}"
-  loop: "{{ certificados_jira }}"
-  loop_control:
-    label: "{{ item.operacao }} {{ item.host }}"
+# - name: Exibir certificados encontrados
+#   ansible.builtin.debug:
+#     msg:
+#       operacao: "{{ item.operacao }}"
+#       ticket: "{{ item.ticket }}"
+#       host: "{{ item.host }}"
+#       tipo: "{{ item.tipo }}"
+#       validade: "{{ item.validade }}"
+#   loop: "{{ certificados_para_atualizar + certificados_para_criar }}"
+#   loop_control:
+#     label: "{{ item.operacao }} {{ item.host }}"
 
 
-############################################################
-# ./roles/inventory/tasks/main.yml
-############################################################
+================================================================
+ARQUIVO: ./roles/inventory/tasks/main.yml
+================================================================
 ---
 # Cria em memória o host usado pelo connection plugin da
 # community.zabbix. Nada é executado no Zabbix aqui.
@@ -856,9 +1009,9 @@ cria_campos_modelo:
   changed_when: false
   when: zabbix_habilitado
 
-############################################################
-# ./roles/relatorios/tasks/certificados.yml
-############################################################
+================================================================
+ARQUIVO: ./roles/relatorios/tasks/certificados.yml
+================================================================
 ---
 # ============================================================
 # Relatório dos certificados (atualização + criação).
@@ -961,7 +1114,280 @@ cria_campos_modelo:
       when: relatorio_certificados | selectattr('status', 'equalto', 'ERRO') | list | length > 0
 
 
+================================================================
+ARQUIVO: ./roles/relatorios/templates/corpo_email.html.j2
+================================================================
+{% set fonte = "font-family:Arial,'Segoe UI',Helvetica,sans-serif;" %}
+{% set cabecalho = "background-color:#eef1f5;padding:8px 10px;border-bottom:1px solid #d5dae1;color:#3e4c59;font-weight:bold;font-size:13px;" %}
+{% set celula = "padding:7px 10px;border-bottom:1px solid #e4e7eb;color:#1f2933;font-size:14px;" %}
+{% set secao = "padding:18px 24px 6px 24px;font-size:12px;font-weight:bold;color:#5f6b7a;letter-spacing:1px;" %}
+{% set cor = "#1565c0" %}
 
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 
+<html xmlns="http://www.w3.org/1999/xhtml" lang="pt-BR">
 
-CONTEXTO Estou desenvolvendo uma automação Ansible para o Jira + Zabbix. O objetivo é processar chamados relacionados a certificados digitais e atualizar/criar itens no Zabbix automaticamente. Já existe uma role chamada "descoberta" que busca os chamados no Jira e extrai as informações necessárias. Atualmente existem DOIS TIPOS DE CHAMADO distintos. ============================================================ TIPO 1 - Atualização de alerta ============================================================ Summary: Atualização de alerta Exemplo de descrição (ADF do Jira): EXTERNO 19/03/2027 - icops.claro.com.br 23/03/2027 - clarocluberest.claro.com.br - hmlg.institutoclaro.org.br 24/03/2027 - portaltecnico.clarobrasil.mobi ... INTERNOS 01/10/2026 - poc-waf.claro.com.br 15/07/2027 - ssltools.claro.com.br Padrão: TIPO CERTIFICADO ↓ DATA ↓ LISTA DE HOSTS ↓ DATA ↓ LISTA DE HOSTS A automação já consegue processar esse formato corretamente. Ela gera: certificados_para_atualizar: - host: acesso.claro.com.br tipo: Externo validade: 19/04/2027 - host: poc-waf.claro.com.br tipo: Interno validade: 01/10/2026 - host: star.primesys.com.br tipo: Externo validade: 15/04/2027 Observação: Quando o host vier assim: *.primesys.com.br ele deve ser convertido para: star.primesys.com.br pois é assim que o Zabbix cadastrou os certificados. ============================================================ TIPO 2 - Criação de alerta de certificado ============================================================ Summary: Criação de Alerta de Certificado - Zabbix Existem DOIS formatos encontrados. ------------------------------------------------------------ Formato A ------------------------------------------------------------ { "type": "paragraph", "content": [ { "type": "text", "text": "Nome completo do certificado:" }, { "type": "text", "text": " clarocustodia.claro.com.br " } ] } { "type": "paragraph", "content": [ { "type": "text", "text": "Tipo de certificado:" }, { "type": "text", "text": " Interno" } ] } { "type": "paragraph", "content": [ { "type": "text", "text": "Data de renovação:" }, { "type": "text", "text": "06/10/2027" } ] } ------------------------------------------------------------ Formato B ------------------------------------------------------------ { "type": "paragraph", "content": [ { "type": "text", "text": "Certificado Novo" } ] } { "type": "paragraph", "content": [ { "type": "text", "text": "Nome dos certificados: poc-waf.claro.com.br" }, { "type": "hardBreak" }, { "type": "text", "text": "Tipo de certificado: Interno" }, { "type": "hardBreak" }, { "type": "text", "text": "Data de renovação: 01/10/2026" } ] } Percebi que o parser atual consegue entender o Formato A mas NÃO consegue entender o Formato B. ============================================================ ZABBIX ============================================================ Os certificados NÃO são hosts. Todos os certificados ficam cadastrados dentro de um único host: CERTIFICADOS_CLARO_BRASIL Cada certificado é um ITEM. Exemplos reais: Nome: Certificado Externo acesso.claro.com.br Key: zbx_valida_data_certificado["acesso.claro.com.br","Externo","19/04/2027"] ------------------------------------------------------------ Nome: Certificado Interno sccdclarocustodia.claro.com.br Key: zbx_valida_data_certificado["sccdclarocustodia.claro.com.br","Interno","09/06/2027"] ============================================================ PROBLEMA ATUAL ============================================================ Preciso adaptar a role de descoberta para suportar os dois tipos de chamado: 1) Atualização de alerta 2) Criação de Alerta de Certificado - Zabbix E para o segundo tipo (criação do alerta), preciso que ela consiga interpretar os DOIS formatos de ADF encontrados (Formato A e Formato B). ============================================================ RESULTADO ESPERADO ============================================================ Independentemente do formato do chamado, quero terminar sempre com uma estrutura padronizada: certificados_para_atualizar: - host: clarocustodia.claro.com.br tipo: Interno validade: 06/10/2027 - host: acesso.claro.com.br tipo: Externo validade: 19/04/2027 - host: poc-waf.claro.com.br tipo: Interno validade: 01/10/2026 ============================================================ PEDIDO ============================================================ Analise os dois formatos de ADF apresentados. Proponha a forma mais simples, legível e de fácil manutenção para: 1) Diferenciar os dois tipos de chamados pelo summary. 2) Processar "Atualização de alerta". 3) Processar "Criação de Alerta de Certificado - Zabbix". 4) Suportar os dois formatos de descrição encontrados para criação de alerta. 5) Produzir sempre a mesma variável final: certificados_para_atualizar contendo: host tipo validade pronta para ser consumida pelo role do Zabbix.
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Relatório Certificados Zabbix</title>
+</head>
+
+<body style="margin:0;padding:0;background-color:#f2f4f7;">
+
+<table role="presentation"
+       width="100%"
+       cellpadding="0"
+       cellspacing="0"
+       border="0"
+       bgcolor="#f2f4f7"
+       style="background-color:#f2f4f7;">
+
+<tr>
+<td align="center" style="padding:20px 10px;">
+
+<table role="presentation"
+       width="680"
+       cellpadding="0"
+       cellspacing="0"
+       border="0"
+       bgcolor="#ffffff"
+       style="width:680px;background-color:#ffffff;border:1px solid #d5dae1;{{ fonte }}">
+
+<tr>
+<td bgcolor="{{ cor }}"
+    style="background-color:{{ cor }};
+           padding:14px 24px;
+           {{ fonte }}
+           font-size:15px;
+           font-weight:bold;
+           color:#ffffff;
+           letter-spacing:1px;">
+
+CERTIFICADOS ZABBIX • JIRA → ZABBIX
+
+</td>
+</tr>
+
+<tr>
+<td style="padding:22px 24px 6px 24px;
+           {{ fonte }}
+           font-size:15px;
+           line-height:22px;
+           color:#1f2933;">
+
+<b>Processamento concluído.</b><br />
+Segue abaixo o resultado da descoberta de chamados e certificados identificados no Jira.
+
+</td>
+</tr>
+
+<tr>
+<td style="{{ secao }}{{ fonte }}">
+RESUMO
+</td>
+</tr>
+
+<tr>
+<td style="padding:0 24px 6px 24px;">
+
+<table role="presentation"
+       width="100%"
+       cellpadding="0"
+       cellspacing="0"
+       border="0"
+       style="border-collapse:collapse;{{ fonte }}font-size:14px;">
+
+<tr>
+<td width="190" valign="top" style="width:190px;{{ celula }}color:#5f6b7a;">
+Chamados encontrados
+</td>
+<td valign="top" style="{{ celula }}">
+{{ tickets_certificados | length }}
+</td>
+</tr>
+
+<tr>
+<td width="190" valign="top" style="width:190px;{{ celula }}color:#5f6b7a;">
+Certificados para atualização
+</td>
+<td valign="top" style="{{ celula }}">
+{{ certificados_para_atualizar | length }}
+</td>
+</tr>
+
+<tr>
+<td width="190" valign="top" style="width:190px;{{ celula }}color:#5f6b7a;">
+Certificados para criação
+</td>
+<td valign="top" style="{{ celula }}">
+{{ certificados_para_criar | length }}
+</td>
+</tr>
+
+<tr>
+<td width="190" valign="top" style="width:190px;{{ celula }}color:#5f6b7a;">
+Total de certificados
+</td>
+<td valign="top" style="{{ celula }}">
+{{ (certificados_para_atualizar | length) + (certificados_para_criar | length) }}
+</td>
+</tr>
+
+</table>
+
+</td>
+</tr>
+
+{% for ticket in tickets_certificados %}
+
+<tr>
+<td style="{{ secao }}{{ fonte }}">
+CHAMADO {{ ticket.key }}
+</td>
+</tr>
+
+<tr>
+<td style="padding:0 24px 6px 24px;">
+
+<table role="presentation"
+       width="100%"
+       cellpadding="0"
+       cellspacing="0"
+       border="0"
+       style="border-collapse:collapse;{{ fonte }}font-size:14px;">
+
+<tr>
+<td width="190" valign="top" style="width:190px;{{ celula }}color:#5f6b7a;">
+Ticket
+</td>
+<td valign="top" style="{{ celula }}">
+{{ ticket.key }}
+</td>
+</tr>
+
+<tr>
+<td width="190" valign="top" style="width:190px;{{ celula }}color:#5f6b7a;">
+Resumo
+</td>
+<td valign="top" style="{{ celula }}">
+{{ ticket.fields.summary }}
+</td>
+</tr>
+
+<tr>
+<td width="190" valign="top" style="width:190px;{{ celula }}color:#5f6b7a;">
+Operação
+</td>
+<td valign="top" style="{{ celula }}">
+
+{% if ticket.key in (tickets_criacao | map(attribute='key') | list) %}
+CRIAÇÃO
+{% else %}
+ATUALIZAÇÃO
+{% endif %}
+
+</td>
+</tr>
+
+</table>
+
+</td>
+</tr>
+
+<tr>
+<td style="padding:0 24px 6px 24px;">
+
+<table role="presentation"
+       width="100%"
+       cellpadding="0"
+       cellspacing="0"
+       border="0"
+       style="border-collapse:collapse;{{ fonte }}font-size:14px;">
+
+<tr>
+<td style="{{ cabecalho }}">
+Host
+</td>
+
+<td width="90" style="{{ cabecalho }}">
+Tipo
+</td>
+
+<td width="130" style="{{ cabecalho }}">
+Validade
+</td>
+
+<td width="120" style="{{ cabecalho }}">
+Operação
+</td>
+</tr>
+
+{% for cert in (certificados_para_atualizar + certificados_para_criar) %}
+
+{% if cert.ticket == ticket.key %}
+
+<tr>
+
+<td valign="top" style="{{ celula }}">
+{{ cert.host }}
+</td>
+
+<td valign="top" style="{{ celula }}">
+{{ cert.tipo }}
+</td>
+
+<td valign="top" style="{{ celula }}">
+{{ cert.validade }}
+</td>
+
+<td valign="top" style="{{ celula }}">
+
+{% if cert.operacao == 'CRIACAO' %}
+<span style="color:#1565c0;font-weight:bold;">
+CRIAÇÃO
+</span>
+{% else %}
+<span style="color:#2e7d32;font-weight:bold;">
+ATUALIZAÇÃO
+</span>
+{% endif %}
+
+</td>
+
+</tr>
+
+{% endif %}
+
+{% endfor %}
+
+</table>
+
+</td>
+</tr>
+
+{% endfor %}
+
+<tr>
+<td style="padding:22px 24px 22px 24px;
+           {{ fonte }}
+           font-size:12px;
+           line-height:18px;
+           color:#7b8794;
+           border-top:1px solid #e4e7eb;">
+
+Este é um e-mail automático gerado pela automação de atualização de certificados Jira → Zabbix.
+
+</td>
+</tr>
+
+</table>
+
+</td>
+</tr>
+
+</table>
+
+</body>
+</html>
