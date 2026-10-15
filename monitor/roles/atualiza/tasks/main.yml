@@ -29,6 +29,11 @@
 #   TIPO_INVALIDO   descrição do chamado sem Externo/Interno
 #   ERRO            a API retornou erro ou não respondeu
 #
+# Description do item: ao atualizar, a linha "Chamado Jira: <ticket>"
+# é ACRESCENTADA ao campo description (em nova linha), preservando o
+# texto que já existia. Se o chamado já constar, a description não
+# muda. Itens JA_ATUALIZADO não são tocados.
+#
 # Fluxo: 1 consulta em lote -> plano por certificado (sem
 # escrita) -> item.update só dos PENDENTES -> resultado final.
 # ============================================================
@@ -37,6 +42,8 @@
 # 1. Buscar de uma vez todos os itens de certificado do host
 #    (uma chamada em vez de uma por certificado).
 #    JSON-RPC devolve HTTP 200 mesmo com erro: valida "error".
+#    "description" é buscada para acrescentar o chamado sem
+#    apagar o texto existente.
 # ------------------------------------------------------------
 - name: Buscar itens de certificado no Zabbix
   ansible.builtin.uri:
@@ -91,6 +98,9 @@
 #    alterar nada. A ordem do "status" abaixo é a ordem de
 #    prioridade das regras. O debug serve só para registrar uma
 #    linha por certificado (resultado em zbx_plano_loop).
+#    ATENÇÃO: só o que está em "msg" chega ao passo 4 (zbx_plano
+#    é montado a partir dele). Todo valor usado pelo item.update
+#    (nova_chave, nova_descricao) precisa estar listado aqui.
 # ------------------------------------------------------------
 - name: Planejar atualizações (somente leitura)
   ansible.builtin.debug:
@@ -105,6 +115,7 @@
       status: "{{ status }}"
       mensagem: "{{ mensagem }}"
       nova_chave: "{{ nova_chave }}"
+      nova_descricao: "{{ nova_descricao }}"
   vars:
     # itens do Zabbix com o mesmo host + tipo (comparação exata na key)
     candidatos: >-
@@ -142,11 +153,14 @@
     # só substitui a data; o restante da key é mantido como está
     nova_chave: >-
       {{ encontrados[0].key_ | regex_replace(zabbix_data_regex, item.validade) if status == 'PENDENTE' else '' }}
+    # description atual do item (só quando há exatamente um item encontrado)
     descricao_atual: "{{ encontrados[0].description | default('') | string | trim if encontrados | length == 1 else '' }}"
+    # mantém o texto atual e acrescenta "Chamado Jira: <ticket>" em nova
+    # linha; se o chamado já consta, não muda. Vazio quando não é PENDENTE.
     nova_descricao: >-
-        {{ descricao_atual if ('Chamado Jira: ' ~ item.ticket) in descricao_atual
-           else (descricao_atual ~ ('\n' if descricao_atual | length > 0 else '') ~ 'Chamado Jira: ' ~ item.ticket)
-           if status == 'PENDENTE' else '' }}
+      {{ '' if status != 'PENDENTE'
+         else descricao_atual if ('Chamado Jira: ' ~ item.ticket) in descricao_atual
+         else (descricao_atual ~ ('\n' if descricao_atual | length > 0 else '') ~ 'Chamado Jira: ' ~ item.ticket) }}
   loop: "{{ certificados_para_atualizar }}"
   loop_control:
     label: "{{ item.host }} ({{ item.tipo }})"
@@ -158,12 +172,12 @@
 
 # ------------------------------------------------------------
 # 4. Atualizar. Só vai para a API o que ficou PENDENTE e somente
-#    com aplicar_alteracoes = true. Enviamos apenas itemid + key_,
-#    então os demais atributos do item não são tocados.
+#    com aplicar_alteracoes = true. Enviamos apenas itemid, key_ e
+#    description, então os demais atributos do item não são tocados.
 #    failed_when: false -> um erro não interrompe os outros itens;
 #    o resultado real de cada chamada é avaliado no passo 5.
 # ------------------------------------------------------------
-- name: Atualizar a key dos itens no Zabbix
+- name: Atualizar a key e a description dos itens no Zabbix
   ansible.builtin.uri:
     url: "{{ zabbix_api_url }}"
     method: POST
@@ -223,8 +237,8 @@
          else 'ERRO' }}
     mensagem: >-
       {{ linha.mensagem if linha.status != 'PENDENTE'
-         else 'Simulação (aplicar_alteracoes=false): a key passaria para ' ~ linha.nova_chave if status == 'SIMULADO'
-         else 'Validade alterada de ' ~ linha.validade_anterior ~ ' para ' ~ linha.validade_solicitada ~ '.' if status == 'ATUALIZADO'
+         else 'Simulação (aplicar_alteracoes=false): a key passaria para ' ~ linha.nova_chave ~ ' e a description ficaria: ' ~ (linha.nova_descricao | replace('\n', ' | ')) if status == 'SIMULADO'
+         else 'Validade alterada de ' ~ linha.validade_anterior ~ ' para ' ~ linha.validade_solicitada ~ '. Chamado ' ~ linha.ticket ~ ' registrado na description.' if status == 'ATUALIZADO'
          else api_erro }}
   loop: "{{ zbx_plano | zip(zbx_update.results) | list }}"
   loop_control:

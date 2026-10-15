@@ -1,7 +1,8 @@
 ---
 # ============================================================
 # Role cria: cadastra itens NOVOS de certificado no host
-# CERTIFICADOS_CLARO_BRASIL, sem duplicar os que já existem.
+# CERTIFICADOS_CLARO_BRASIL, sem duplicar os que já existem, e
+# cria a trigger de expiração de cada item criado.
 #
 # Entrada (role descoberta):
 #   certificados_para_criar:
@@ -12,10 +13,11 @@
 #       validade: "20/08/2027"
 #
 # Saída (consumida pela role relatorios):
-#   resultado_criacao (mesmas colunas de resultado_atualizacao).
+#   resultado_criacao (mesmas colunas de resultado_atualizacao,
+#   mais key_ com a key do item criado).
 #
 # Status possíveis:
-#   CRIADO         API confirmou a criação (itemid novo na linha)
+#   CRIADO         API confirmou a criação do item (e da trigger)
 #   SIMULADO       aplicar_alteracoes = false (nada foi gravado)
 #   JA_EXISTE      já há item para host + tipo (não cria; para mudar
 #                  a data use chamado de atualização)
@@ -24,13 +26,20 @@
 #   CONFLITO       chamados pedem validades diferentes para o mesmo
 #                  certificado (não cria)
 #   TIPO_INVALIDO  descrição do chamado sem Externo/Interno
-#   ERRO           a API retornou erro ou não respondeu
+#   ERRO           a API retornou erro ou não respondeu. Também é usado
+#                  quando o item foi criado mas a trigger falhou (a
+#                  mensagem informa o itemid; a trigger deve ser criada
+#                  manualmente, pois uma nova execução veria JA_EXISTE).
 #
 # Como o item novo é montado (nada é inventado):
-#   - key_  : a key do item-modelo, trocando host e data;
-#   - name  : o nome do item-modelo, trocando host e data;
-#   - hostid: obtido por host.get do host de certificados;
+#   - key_       : a key do item-modelo, trocando host e data;
+#   - name       : o nome do item-modelo, trocando host e data;
+#   - description: a do item-modelo + "Chamado Jira: <ticket>";
+#   - hostid     : obtido por host.get do host de certificados;
 #   - demais atributos: copiados do item-modelo (cria_campos_modelo).
+#
+# Trigger (somente para itens CRIADOS): módulo
+# community.zabbix.zabbix_trigger, usando a key exata do item criado.
 # ============================================================
 
 # ------------------------------------------------------------
@@ -180,6 +189,8 @@
          | selectattr('key', 'in', cria_campos_modelo)
          | rejectattr('value', 'in', ['', []])
          | items2dict }}
+    # description = a do modelo + "Chamado Jira: <ticket>" (nova linha).
+    # Só é avaliada quando PENDENTE (o modelo existe nesse caso).
     descricao_modelo: "{{ modelo.item.description | default('') | string | trim }}"
     descricao_ticket: >-
       {{ descricao_modelo if ('Chamado Jira: ' ~ item.ticket) in descricao_modelo
@@ -223,9 +234,10 @@
   failed_when: false
 
 # ------------------------------------------------------------
-# 5. Resultado final. Sucesso = HTTP 200 + sem "error" no JSON-RPC
-#    + um itemid em result.itemids. Qualquer outra coisa vira ERRO
-#    com a mensagem da API (ou do transporte).
+# 5. Resultado final dos itens. Sucesso = HTTP 200 + sem "error" no
+#    JSON-RPC + um itemid em result.itemids. Qualquer outra coisa
+#    vira ERRO com a mensagem da API (ou do transporte).
+#    key_ vai na linha para a trigger (passo 6) usar a key exata.
 # ------------------------------------------------------------
 - name: Consolidar resultado da criação
   ansible.builtin.debug:
@@ -259,7 +271,7 @@
          else 'ERRO' }}
     mensagem: >-
       {{ linha.mensagem if linha.status != 'PENDENTE'
-         else 'Simulação (aplicar_alteracoes=false): seria criado o item "' ~ linha.payload.name ~ '" com a key ' ~ linha.payload.key_ if status == 'SIMULADO'
+         else 'Simulação (aplicar_alteracoes=false): seria criado o item "' ~ linha.payload.name ~ '" com a key ' ~ linha.payload.key_ ~ ' e a trigger de expiração correspondente.' if status == 'SIMULADO'
          else 'Item criado: ' ~ linha.payload.key_ if status == 'CRIADO'
          else api_erro }}
   loop: "{{ zbx_plano | zip(zbx_create.results) | list }}"
@@ -274,25 +286,38 @@
 # ------------------------------------------------------------
 # 6. Criar trigger somente para itens que foram realmente criados.
 #    Em simulação, resultado_criacao não contém status CRIADO, então
-#    nenhum trigger é criado. O módulo é idempotente pelo nome.
+#    nenhuma trigger é criada.
+#
+#    Pontos importantes do módulo community.zabbix.zabbix_trigger:
+#    - severity, recovery_mode, correlation_mode, generate_multiple_events,
+#      manual_close, enabled, expression, recovery_expression, event_name
+#      e tags ficam DENTRO de "params";
+#    - o texto de descrição vai em "desc" (campo "comments" da trigger);
+#      "description" dentro de params é o NOME da trigger na API e o
+#      módulo o sobrescreve com "name";
+#    - ignore_errors: se a trigger falhar, o play NÃO pode parar aqui,
+#      senão a role relatorios não roda e o e-mail não é enviado. A falha
+#      é refletida no resultado no passo 7.
 # ------------------------------------------------------------
 - name: Criar triggers para certificados recém-criados
   community.zabbix.zabbix_trigger:
     name: "Certificado {{ item.tipo }} {{ item.host | regex_replace('^star\\.', '*.') }} expirado"
     host_name: "{{ zabbix_host_certificados }}"
-    severity: not_classified
-    recovery_mode: recovery_expression
-    correlation_mode: all
-    generate_multiple_events: false
-    manual_close: false
-    enabled: true
+    desc: |-
+      Verifica status do certificado.
+      Gera alarme quando estiver expirado
     params:
       event_name: "Certificado {{ item.tipo }} {{ item.host | regex_replace('^star\\.', '*.') }} expirado"
       expression: 'find(/{{ zabbix_host_certificados }}/{{ item.key_ }},#1,"like","expirado")<>0'
+      recovery_mode: recovery_expression
       recovery_expression: 'find(/{{ zabbix_host_certificados }}/{{ item.key_ }},#1,"like","OK")<>0'
-      description: |-
-        Verifica status do certificado.
-        Gera alarme quando estiver expirado
+      # confirme a severidade desejada: not_classified | information |
+      # warning | average | high | disaster
+      severity: not_classified
+      correlation_mode: all
+      generate_multiple_events: false
+      manual_close: false
+      enabled: true
       tags:
         - tag: impacto
           value: SERVICO
@@ -305,16 +330,40 @@
     label: "{{ item.host }} ({{ item.tipo }})"
   register: zbx_trigger_create
   when: zabbix_aplicar_alteracoes | bool
+  ignore_errors: true
 
 - name: Exibir resultado da criação dos triggers
   ansible.builtin.debug:
     msg:
       certificado: "{{ item.item.host }} ({{ item.item.tipo }})"
-      trigger: "{{ item.item.tipo }} {{ item.item.host | regex_replace('^star\\.', '*.') }} expirado"
+      trigger: "Certificado {{ item.item.tipo }} {{ item.item.host | regex_replace('^star\\.', '*.') }} expirado"
       resultado: "{{ 'OK' if not (item.failed | default(false)) else 'ERRO' }}"
-      mensagem: "{{ item.msg | default('Trigger criado/atualizado.') }}"
+      mensagem: "{{ item.msg | default('Trigger criada/atualizada.') }}"
   loop: "{{ zbx_trigger_create.results | default([]) }}"
   loop_control:
     label: "{{ item.item.host | default('trigger') }}"
   when: zabbix_aplicar_alteracoes | bool
 
+# ------------------------------------------------------------
+# 7. Refletir falhas de trigger no resultado do relatório. Item criado
+#    com trigger que falhou vira ERRO (o e-mail mostra o itemid e a
+#    role relatorios falha o job DEPOIS de enviar o e-mail). Sem
+#    falhas, resultado_criacao permanece exatamente como está.
+# ------------------------------------------------------------
+- name: Refletir falhas de trigger em resultado_criacao
+  ansible.builtin.set_fact:
+    resultado_criacao: >-
+      {%- set falhas = namespace(lista=[]) -%}
+      {%- for t in zbx_trigger_create.results | default([]) if t.failed | default(false) -%}
+      {%- set falhas.lista = falhas.lista + [{'itemid': t.item.itemid, 'msg': t.msg | default('sem detalhes')}] -%}
+      {%- endfor -%}
+      {%- set nova = namespace(lista=[]) -%}
+      {%- for r in resultado_criacao -%}
+      {%- set f = falhas.lista | selectattr('itemid', 'equalto', r.itemid) | list -%}
+      {%- if f | length > 0 -%}
+      {%- set nova.lista = nova.lista + [r | combine({'status': 'ERRO', 'mensagem': 'Item criado (itemid ' ~ r.itemid ~ ', key ' ~ r.key_ ~ '), mas a trigger NÃO foi criada: ' ~ f[0].msg ~ ' Crie a trigger manualmente.'})] -%}
+      {%- else -%}
+      {%- set nova.lista = nova.lista + [r] -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ nova.lista }}
