@@ -3,14 +3,19 @@
 # PLAYBOOK ÚNICO - VALIDAÇÃO / DEPLOY INFOBLOX DNS LINUX
 # =============================================================================
 # Variáveis do Survey:
-#   - modo_validacao: validation | pos-validacao | deploy   (default: validation)
+#   - modo_validacao: validation | pos-validacao | deploy | rollback   (default: validation)
 #       * validation    -> PRE-CHECK (comportamento atual, inalterado)
 #       * pos-validacao -> POS-VALIDACAO da GMUD (somente leitura)
 #       * deploy        -> ALTERAÇÃO EFETIVA do DNS. Executa os roles existentes
 #                          (rhel_<dc> / sunos_<dc>) SOMENTE nos hosts classificados
 #                          como "OK PARA ALTERAÇÃO" (mesmos critérios do pre-check)
 #                          e revalida o resultado em seguida (somente leitura).
-#                          Rollback: roles rhel_rollback / sunos_rollback.
+#       * rollback      -> REVERTE o resolv.conf a partir do backup
+#                          /etc/resolv.conf.bkp-ansible (criado pelo deploy), usando os
+#                          roles rhel_rollback / sunos_rollback. Só atua em hosts que
+#                          tenham o backup e cujo resolv.conf difira dele; revalida
+#                          em seguida que o arquivo voltou idêntico ao backup.
+#                          Obs.: como nos roles, NÃO reverte o nsswitch.conf (SunOS).
 #   - servers: Lista de IPs (um por linha)
 #   - datacenter: Mackenzie | Lapa | Campinas
 #   - email_destino: Email para enviar relatório
@@ -30,14 +35,14 @@
     - name: Validar parâmetros do Survey
       ansible.builtin.assert:
         that:
-          - modo in ['validation', 'pos-validacao', 'deploy']
+          - modo in ['validation', 'pos-validacao', 'deploy', 'rollback']
           - datacenter is defined
           - datacenter in ['Mackenzie', 'Lapa', 'Campinas']
           - servers is defined
           - servers.splitlines() | map('trim') | select() | list | length > 0
         fail_msg: >-
           Parametros invalidos no Survey.
-          modo_validacao deve ser validation, pos-validacao ou deploy (recebido: {{ modo_validacao | default('nao definido') }});
+          modo_validacao deve ser validation, pos-validacao, deploy ou rollback (recebido: {{ modo_validacao | default('nao definido') }});
           datacenter deve ser Mackenzie, Lapa ou Campinas (recebido: {{ datacenter | default('nao definido') }});
           servers nao pode estar vazio.
         quiet: true
@@ -368,6 +373,81 @@
         - modo == 'deploy'
         - deploy_elegivel | default(false) | bool
 
+    # =========================================================================
+    # ETAPA 3D: ROLLBACK - REVERTER resolv.conf PELO BACKUP (EXCLUSIVA DO MODO rollback)
+    # Só atua em hosts com SSH ok + SO em escopo + backup existente + resolv.conf
+    # diferente do backup. A reversão é feita pelos roles rhel_rollback / sunos_rollback.
+    # =========================================================================
+    - name: ROLLBACK | Definir família do SO e nameservers atuais
+      ansible.builtin.set_fact:
+        rb_familia: >-
+          {%- if not (ssh_ok | default(false)) -%}
+            none
+          {%- elif (so_detectado | default('')) in ['RHEL', 'CentOS', 'Oracle Linux'] -%}
+            rhel
+          {%- elif (so_detectado | default('')) == 'SunOS' -%}
+            sunos
+          {%- else -%}
+            none
+          {%- endif -%}
+        rb_nameservers_antes: "{{ (resolv_conf.stdout_lines | default([]) | select('search', '^\\s*nameserver\\s+') | list | join(' | ')) | trim }}"
+      when: modo == 'rollback'
+
+    - name: ROLLBACK | Verificar backup e diferença para o resolv.conf atual (somente leitura)
+      ansible.builtin.raw: |
+        if [ -f /etc/resolv.conf.bkp-ansible ]; then
+          echo "BKP_YES"
+          if cmp -s /etc/resolv.conf /etc/resolv.conf.bkp-ansible; then
+            echo "IGUAL_YES"
+          else
+            echo "IGUAL_NO"
+          fi
+        else
+          echo "BKP_NO"
+        fi
+      register: rb_bkp_check
+      when:
+        - modo == 'rollback'
+        - rb_familia | default('none') != 'none'
+      changed_when: false
+
+    - name: ROLLBACK | Definir elegibilidade e role a executar
+      ansible.builtin.set_fact:
+        rb_backup_existe: "{{ 'BKP_YES' in (rb_bkp_check.stdout | default('')) }}"
+        rb_ja_original: "{{ 'IGUAL_YES' in (rb_bkp_check.stdout | default('')) }}"
+        rb_elegivel: "{{ (rb_familia != 'none') and ('BKP_YES' in (rb_bkp_check.stdout | default(''))) and ('IGUAL_NO' in (rb_bkp_check.stdout | default(''))) }}"
+        rb_role: "{{ rb_familia ~ '_rollback' }}"
+      when: modo == 'rollback'
+
+    - name: ROLLBACK | Executar role de rollback (rhel_rollback / sunos_rollback)
+      ansible.builtin.include_role:
+        name: "{{ rb_role }}"
+      when:
+        - modo == 'rollback'
+        - rb_elegivel | default(false) | bool
+
+    - name: ROLLBACK | Pós-verificação do host revertido (somente leitura)
+      ansible.builtin.raw: |
+        if cmp -s /etc/resolv.conf /etc/resolv.conf.bkp-ansible; then
+          echo "RESTORE_OK"
+        else
+          echo "RESTORE_NAO_OK"
+        fi
+        cat /etc/resolv.conf 2>/dev/null
+      register: rb_pos
+      when:
+        - modo == 'rollback'
+        - rb_elegivel | default(false) | bool
+      changed_when: false
+
+    - name: ROLLBACK | Registrar pós-verificação
+      ansible.builtin.set_fact:
+        rb_restaurado_ok: "{{ 'RESTORE_OK' in (rb_pos.stdout | default('')) }}"
+        rb_nameservers_depois: "{{ ((rb_pos.stdout_lines | default([])) | select('search', '^\\s*nameserver\\s+') | list | join(' | ')) | trim }}"
+      when:
+        - modo == 'rollback'
+        - rb_elegivel | default(false) | bool
+
     # -------------------------------------------------------------------------
     # ETAPA 4A: CLASSIFICAR RESULTADO - MODO VALIDATION
     # Classificacao operacional: somente o que interessa para o deploy.
@@ -624,6 +704,74 @@
             {%- endif -%}
       when: modo == 'deploy'
 
+    # -------------------------------------------------------------------------
+    # ETAPA 4D: CLASSIFICAR RESULTADO - MODO ROLLBACK
+    # Status possíveis:
+    #   SUCESSO               -> revertido e validado (resolv.conf idêntico ao backup)
+    #   FALHA                 -> role executada, mas resolv.conf não ficou igual ao backup
+    #   JA ORIGINAL           -> resolv.conf já idêntico ao backup (nada a reverter)
+    #   SEM BACKUP            -> /etc/resolv.conf.bkp-ansible não existe (nada alterado)
+    #   FORA DE ESCOPO        -> SO sem role de rollback (nada alterado)
+    #   ERRO DE CONECTIVIDADE -> sem SSH (nada alterado)
+    # -------------------------------------------------------------------------
+    - name: RESULTADO | Classificar host (rollback)
+      ansible.builtin.set_fact:
+        resultado_host:
+          ip: "{{ inventory_hostname }}"
+          datacenter: "{{ datacenter }}"
+          so: "{{ so_detectado | default('Desconhecido') }}"
+          role: "{{ rb_role if (rb_elegivel | default(false) | bool) else 'N/A' }}"
+          backup: >-
+            {%- if (not (ssh_ok | default(false))) or ((rb_familia | default('none')) == 'none') -%}
+              N/A
+            {%- elif rb_backup_existe | default(false) -%}
+              SIM
+            {%- else -%}
+              NAO
+            {%- endif -%}
+          acao: >-
+            {%- if rb_elegivel | default(false) | bool -%}
+              ROLLBACK EXECUTADO
+            {%- else -%}
+              NENHUMA
+            {%- endif -%}
+          dns_antes: "{{ rb_nameservers_antes | default('') }}"
+          dns_depois: "{{ (rb_nameservers_depois | default('')) if (rb_elegivel | default(false) | bool) else (rb_nameservers_antes | default('')) }}"
+          status: >-
+            {%- if not (ssh_ok | default(false)) -%}
+              ERRO DE CONECTIVIDADE
+            {%- elif (rb_familia | default('none')) == 'none' -%}
+              FORA DE ESCOPO
+            {%- elif not (rb_backup_existe | default(false)) -%}
+              SEM BACKUP
+            {%- elif rb_ja_original | default(false) -%}
+              JA ORIGINAL
+            {%- elif not (rb_elegivel | default(false) | bool) -%}
+              FALHA
+            {%- elif rb_restaurado_ok | default(false) | bool -%}
+              SUCESSO
+            {%- else -%}
+              FALHA
+            {%- endif -%}
+          motivo: >-
+            {%- set erro_msg = ssh_erro_msg | default('') -%}
+            {%- if not (ssh_ok | default(false)) -%}
+              Sem acesso SSH{% if erro_msg %} - {{ erro_msg | regex_replace('\n', ' ') | truncate(120) }}{% endif %}
+            {%- elif (rb_familia | default('none')) == 'none' -%}
+              Sistema operacional sem role de rollback (apenas Red Hat/CentOS/Oracle Linux e SunOS) - reverter manualmente
+            {%- elif not (rb_backup_existe | default(false)) -%}
+              Backup /etc/resolv.conf.bkp-ansible nao encontrado - nada foi alterado; reverter manualmente
+            {%- elif rb_ja_original | default(false) -%}
+              resolv.conf ja identico ao backup - nada a reverter
+            {%- elif not (rb_elegivel | default(false) | bool) -%}
+              Nao foi possivel comparar o resolv.conf com o backup - nada foi alterado; verificar manualmente
+            {%- elif rb_restaurado_ok | default(false) | bool -%}
+              Rollback aplicado e validado (role {{ rb_role }}); resolv.conf identico ao backup
+            {%- else -%}
+              Role {{ rb_role }} executada, mas resolv.conf nao ficou identico ao backup - verificar manualmente
+            {%- endif -%}
+      when: modo == 'rollback'
+
 # =============================================================================
 # PLAY 3: GERAR RELATÓRIO E ENVIAR EMAIL
 # =============================================================================
@@ -717,6 +865,28 @@
       loop: "{{ groups['unix'] | default([]) }}"
       when:
         - modo == 'deploy'
+        - hostvars[item].resultado_host is not defined
+
+    - name: RELATORIO | Adicionar hosts não processados (rollback)
+      ansible.builtin.set_fact:
+        resultados: >-
+          {{
+            resultados + [{
+              'ip': item,
+              'datacenter': datacenter | default('N/A'),
+              'so': 'Desconhecido',
+              'role': 'N/A',
+              'backup': 'N/A',
+              'acao': 'NENHUMA',
+              'dns_antes': '',
+              'dns_depois': '',
+              'status': 'FALHA',
+              'motivo': 'Host nao foi processado - verificar logs'
+            }]
+          }}
+      loop: "{{ groups['unix'] | default([]) }}"
+      when:
+        - modo == 'rollback'
         - hostvars[item].resultado_host is not defined
 
     # =========================================================================
@@ -1021,6 +1191,111 @@
           ================================================================
       when: modo == 'deploy'
 
+    # =========================================================================
+    # RAMO D: ROLLBACK (MODO ROLLBACK)
+    # =========================================================================
+    - name: RELATORIO | Calcular contadores (rollback)
+      ansible.builtin.set_fact:
+        total_hosts: "{{ resultados | length }}"
+        total_sucesso: "{{ resultados | selectattr('status', 'equalto', 'SUCESSO') | list | length }}"
+        total_falha: "{{ resultados | selectattr('status', 'equalto', 'FALHA') | list | length }}"
+        total_ja_original: "{{ resultados | selectattr('status', 'equalto', 'JA ORIGINAL') | list | length }}"
+        total_sem_backup: "{{ resultados | selectattr('status', 'equalto', 'SEM BACKUP') | list | length }}"
+        total_fora_escopo: "{{ resultados | selectattr('status', 'equalto', 'FORA DE ESCOPO') | list | length }}"
+        total_erro_conectividade: "{{ resultados | selectattr('status', 'equalto', 'ERRO DE CONECTIVIDADE') | list | length }}"
+      when: modo == 'rollback'
+
+    - name: EXCEL | Montar matriz (rollback)
+      ansible.builtin.set_fact:
+        excel_matrix: >-
+          {%- set matrix = [] -%}
+          {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 1, 'cell_value': 'RELATORIO ROLLBACK INFOBLOX - REVERSAO DNS LINUX'}) -%}
+          {%- set _ = matrix.append({'cell_row': 3, 'cell_col': 1, 'cell_value': 'Data/Hora:'}) -%}
+          {%- set _ = matrix.append({'cell_row': 3, 'cell_col': 2, 'cell_value': ansible_date_time.date ~ ' ' ~ ansible_date_time.time}) -%}
+          {%- set _ = matrix.append({'cell_row': 4, 'cell_col': 1, 'cell_value': 'Datacenter:'}) -%}
+          {%- set _ = matrix.append({'cell_row': 4, 'cell_col': 2, 'cell_value': datacenter | default('N/A')}) -%}
+          {%- set _ = matrix.append({'cell_row': 5, 'cell_col': 1, 'cell_value': 'RDM:'}) -%}
+          {%- set _ = matrix.append({'cell_row': 5, 'cell_col': 2, 'cell_value': rdm | default('N/A')}) -%}
+          {%- set _ = matrix.append({'cell_row': 7, 'cell_col': 1, 'cell_value': 'RESUMO'}) -%}
+          {%- set _ = matrix.append({'cell_row': 8, 'cell_col': 1, 'cell_value': 'Total:'}) -%}
+          {%- set _ = matrix.append({'cell_row': 8, 'cell_col': 2, 'cell_value': total_hosts}) -%}
+          {%- set _ = matrix.append({'cell_row': 9, 'cell_col': 1, 'cell_value': 'Sucesso (revertido e validado):'}) -%}
+          {%- set _ = matrix.append({'cell_row': 9, 'cell_col': 2, 'cell_value': total_sucesso}) -%}
+          {%- set _ = matrix.append({'cell_row': 10, 'cell_col': 1, 'cell_value': 'Falha (rollback nao validado):'}) -%}
+          {%- set _ = matrix.append({'cell_row': 10, 'cell_col': 2, 'cell_value': total_falha}) -%}
+          {%- set _ = matrix.append({'cell_row': 11, 'cell_col': 1, 'cell_value': 'Ja original (nada a reverter):'}) -%}
+          {%- set _ = matrix.append({'cell_row': 11, 'cell_col': 2, 'cell_value': total_ja_original}) -%}
+          {%- set _ = matrix.append({'cell_row': 12, 'cell_col': 1, 'cell_value': 'Sem backup (nada alterado):'}) -%}
+          {%- set _ = matrix.append({'cell_row': 12, 'cell_col': 2, 'cell_value': total_sem_backup}) -%}
+          {%- set _ = matrix.append({'cell_row': 13, 'cell_col': 1, 'cell_value': 'Fora de escopo (nada alterado):'}) -%}
+          {%- set _ = matrix.append({'cell_row': 13, 'cell_col': 2, 'cell_value': total_fora_escopo}) -%}
+          {%- set _ = matrix.append({'cell_row': 14, 'cell_col': 1, 'cell_value': 'Erro de conectividade (nada alterado):'}) -%}
+          {%- set _ = matrix.append({'cell_row': 14, 'cell_col': 2, 'cell_value': total_erro_conectividade}) -%}
+          {%- set _ = matrix.append({'cell_row': 16, 'cell_col': 1, 'cell_value': 'SERVIDOR/IP'}) -%}
+          {%- set _ = matrix.append({'cell_row': 16, 'cell_col': 2, 'cell_value': 'DATACENTER'}) -%}
+          {%- set _ = matrix.append({'cell_row': 16, 'cell_col': 3, 'cell_value': 'SO'}) -%}
+          {%- set _ = matrix.append({'cell_row': 16, 'cell_col': 4, 'cell_value': 'ROLE'}) -%}
+          {%- set _ = matrix.append({'cell_row': 16, 'cell_col': 5, 'cell_value': 'BACKUP'}) -%}
+          {%- set _ = matrix.append({'cell_row': 16, 'cell_col': 6, 'cell_value': 'ACAO'}) -%}
+          {%- set _ = matrix.append({'cell_row': 16, 'cell_col': 7, 'cell_value': 'DNS ANTES'}) -%}
+          {%- set _ = matrix.append({'cell_row': 16, 'cell_col': 8, 'cell_value': 'DNS DEPOIS'}) -%}
+          {%- set _ = matrix.append({'cell_row': 16, 'cell_col': 9, 'cell_value': 'STATUS FINAL'}) -%}
+          {%- set _ = matrix.append({'cell_row': 16, 'cell_col': 10, 'cell_value': 'MOTIVO'}) -%}
+          {%- for item in resultados -%}
+            {%- set row = loop.index + 16 -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 1, 'cell_value': item.ip}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 2, 'cell_value': item.datacenter | default('') | trim}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 3, 'cell_value': item.so | default('') | trim}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 4, 'cell_value': item.role | default('') | trim}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 5, 'cell_value': item.backup | default('') | trim}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 6, 'cell_value': item.acao | default('') | trim}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 7, 'cell_value': item.dns_antes | default('') | trim}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 8, 'cell_value': item.dns_depois | default('') | trim}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 9, 'cell_value': item.status | default('') | trim}) -%}
+            {%- set _ = matrix.append({'cell_row': row, 'cell_col': 10, 'cell_value': item.motivo | default('') | trim}) -%}
+          {%- endfor -%}
+          {{ matrix }}
+      when: modo == 'rollback'
+
+    - name: EMAIL | Listas (rollback)
+      ansible.builtin.set_fact:
+        lista_rb_sucesso: "{% for r in resultados if r.status | trim == 'SUCESSO' %}\n- {{ r.ip }} ({{ r.so | trim }}) | role {{ r.role | trim }}{% else %}\nNenhum{% endfor %}"
+        lista_rb_falha: "{% for r in resultados if r.status | trim == 'FALHA' %}\n- {{ r.ip }} ({{ r.so | trim }}) | {{ r.motivo | trim }}{% else %}\nNenhum{% endfor %}"
+        lista_rb_ja_original: "{% for r in resultados if r.status | trim == 'JA ORIGINAL' %}\n- {{ r.ip }} ({{ r.so | trim }}){% else %}\nNenhum{% endfor %}"
+        lista_rb_sem_backup: "{% for r in resultados if r.status | trim == 'SEM BACKUP' %}\n- {{ r.ip }} ({{ r.so | trim }}){% else %}\nNenhum{% endfor %}"
+        lista_rb_fora_escopo: "{% for r in resultados if r.status | trim == 'FORA DE ESCOPO' %}\n- {{ r.ip }} ({{ r.so | trim }}){% else %}\nNenhum{% endfor %}"
+        lista_rb_conectividade: "{% for r in resultados if r.status | trim == 'ERRO DE CONECTIVIDADE' %}\n- {{ r.ip }} | {{ r.motivo | trim }}{% else %}\nNenhum{% endfor %}"
+      when: modo == 'rollback'
+
+    - name: RELATORIO | Exibir no console (rollback)
+      ansible.builtin.debug:
+        msg: |
+          ================================================================
+          RELATORIO ROLLBACK INFOBLOX - REVERSAO DNS LINUX
+          ================================================================
+          Data/Hora: {{ ansible_date_time.date }} {{ ansible_date_time.time }}
+          Datacenter: {{ datacenter | default('N/A') }}
+          RDM: {{ rdm | default('N/A') }}
+          Total de hosts: {{ total_hosts }}
+          ----------------------------------------------------------------
+          SUCESSO - revertido e validado ({{ total_sucesso }}):{{ lista_rb_sucesso }}
+
+          FALHA - rollback nao validado ({{ total_falha }}):{{ lista_rb_falha }}
+
+          JA ORIGINAL - nada a reverter ({{ total_ja_original }}):{{ lista_rb_ja_original }}
+
+          SEM BACKUP - nada alterado ({{ total_sem_backup }}):{{ lista_rb_sem_backup }}
+
+          FORA DE ESCOPO - nada alterado ({{ total_fora_escopo }}):{{ lista_rb_fora_escopo }}
+
+          ERRO DE CONECTIVIDADE - nada alterado ({{ total_erro_conectividade }}):{{ lista_rb_conectividade }}
+          ================================================================
+          Apenas o resolv.conf e revertido (nsswitch.conf do SunOS nao e
+          revertido pelos roles de rollback).
+          Planilha: {{ relatorio_excel }}
+          ================================================================
+      when: modo == 'rollback'
+
     # -------------------------------------------------------------------------
     # GERAR PLANILHA EXCEL (compartilhado - usa excel_matrix do modo ativo)
     # -------------------------------------------------------------------------
@@ -1028,7 +1303,7 @@
       ans2dev.general.open_xl:
         op: n
         dest: "{{ relatorio_excel }}"
-        sheet_name: "{{ {'pos-validacao': 'Pos-Validacao Infoblox', 'deploy': 'Deploy Infoblox'}.get(modo, 'Infoblox Linux') }}"
+        sheet_name: "{{ {'pos-validacao': 'Pos-Validacao Infoblox', 'deploy': 'Deploy Infoblox', 'rollback': 'Rollback Infoblox'}.get(modo, 'Infoblox Linux') }}"
         updates_matrix: "{{ excel_matrix }}"
 
     # -------------------------------------------------------------------------
