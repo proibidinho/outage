@@ -1,0 +1,247 @@
+
+=================================================================
+ARQUIVO: ./ansible.cfg
+=================================================================
+#Arquivo default de configuração do Ansible para o AAP, adicione aqui suas configurações personalizadas
+
+[defaults]
+timeout=120
+show_custom_stats=true
+host_key_checking=false
+inventory=files/inventory
+callbacks_enabled=timer, profile_tasks, profile_roles
+
+[ssh_connection]
+retries=30
+ssh_args=-o ControlMaster=auto -o ControlPersist=60s
+pipelining=True
+
+=================================================================
+ARQUIVO: ./playbook.yaml
+=================================================================
+---
+- name: Playbook para atualizar surveys dos Job Templates DML
+  hosts: localhost
+  connection: local
+  
+  vars_files:
+    - vars/test_vars.yml 
+
+  tasks:
+
+    - name: Include JIRA role
+      ansible.builtin.include_role:
+        name: dml.oracle_dml.jira  
+      when: platform == 'JIRA'
+
+    - name: Include ITP role
+      ansible.builtin.include_role:
+        name: dml.oracle_dml.itp  
+      when: platform == 'ITP'
+
+    - name: Include OS/OC role
+      ansible.builtin.include_role:
+        name: dml.oracle_dml.os_oc  
+      when: platform == 'OS/OC'
+    
+    - name: Include Oracle role
+      ansible.builtin.include_role:
+        name: execute_mass
+      when: (
+        executar_oracle_jira | default(false) or 
+        executar_oracle_osoc | default(false) or
+        executar_oracle_itp | default(false))
+
+
+=================================================================
+ARQUIVO: ./README.md
+=================================================================
+#Exemplo de readme.md preencha com as informações do seu projeto
+
+**Objetivo**
+-------------
+
+- Preencha com o objetivo do seu projeto
+
+=======================================================================
+
+**Ambiente**
+-------------
+
+- [x] Desenvolvimento ou;
+- [x] Homologação ou;
+- [x] Produção.
+
+=======================================================================
+
+**Funções**
+-------------
+ 
+- [x] Informe aqui cada função do seu projeto;
+- [X] Adicione quantas linhas forem necessárias;
+
+=================================================================
+ARQUIVO: ./roles/execute_mass/tasks/main.yaml
+=================================================================
+- name: Mostrar CSV convertido (debug)
+  debug:
+    var: csv_text
+
+- name: Criar arquivo temporário com o CSV da survey
+  tempfile:
+    state: file
+    suffix: .csv
+  register: csv_temp
+
+- name: Escrever CSV no arquivo temporário
+  copy:
+    content: "{{ csv_text }}"
+    dest: "{{ csv_temp.path }}"
+
+- name: Ler CSV do arquivo
+  community.general.read_csv:
+    path: "{{ csv_temp.path }}"
+    delimiter: ";"
+  register: csv_list
+
+- name: Mostrar CSV convertido (debug)
+  debug:
+    var: csv_list
+
+- name: Obter colunas do CSV
+  set_fact:
+    csv_columns: "{{ csv_list.list[0].keys() | list }}"
+
+- name: Obter Organization
+  uri:
+    url: "{{ aap_hostname }}/api/controller/v2/job_templates/{{ tower_job_template_id }}/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ aap_token }}"
+      Content-Type: application/json
+    validate_certs: false
+    return_content: yes
+  register: job_template_massivo
+
+- name: Organization ID
+  debug:
+    var: job_template_massivo.json.organization
+    
+- name: Job Template Id
+  debug:
+    var: tower_job_template_id
+
+
+- name: Obter Job Template 
+  uri:
+    url: "{{ aap_hostname }}/api/controller/v2/job_templates/?name={{ job_template_name | urlencode }}&organization={{ job_template_massivo.json.organization }}" 
+    method: GET
+    headers:
+      Authorization: "Bearer {{ aap_token }}"
+      Content-Type: application/json
+    validate_certs: false
+    return_content: yes
+  register: jt_list
+
+- name: Falhar se o Job Template não for encontrado
+  fail:
+    msg: >
+      Job Template '{{ job_template_name }}' não encontrado
+      na organização {{ awx_organization_id }}.
+  when: jt_list.json.count | int == 0
+
+- name: Obter Job Template ID
+  set_fact:
+    job_template_id: "{{ jt_list.json.results[0].id }}"
+
+- name: Obter Job Template 
+  uri:
+    url: "{{ aap_hostname }}/api/controller/v2/job_templates/{{ job_template_id }}/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ aap_token }}"
+      Content-Type: application/json
+    validate_certs: false
+    return_content: yes
+  register: jt_api
+
+- name: Garantir que o Job Template possui survey
+  assert:
+    that:
+      - jt_api.json.survey_enabled | default(false)
+      - jt_api.json.related.survey_spec is defined
+    fail_msg: >
+      O Job Template {{ job_template_id }} não possui survey habilitada.
+
+- name: Obter survey do Job Template via API
+  uri:
+    url: "{{ aap_hostname }}/api/controller/v2/job_templates/{{ job_template_id }}/survey_spec/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ aap_token }}"
+      Content-Type: application/json
+    validate_certs: false
+    return_content: yes
+  register: survey_api
+  no_log: true
+
+- name: Extrair variáveis da survey com prefixo P_
+  set_fact:
+    survey_vars_p: >-
+      {{
+        survey_api.json.spec
+        | map(attribute='variable')
+        | select('match', '^P_')
+        | list
+      }}
+
+- name: Mostrar surveys dinamicas
+  debug:
+    var: survey_vars_p
+
+- name: Validar se todas as surveys P_ estão no CSV
+  assert:
+    that:
+      - survey_vars_p | difference(csv_columns) | length == 0
+    fail_msg: >
+      CSV não contém todas as variáveis exigidas pelo template.
+      Esperado (survey): {{ survey_vars_p }}
+      Recebido (CSV): {{ csv_columns }}
+
+- name: Variaveis fixas do template
+  set_fact:
+    extra_vars_fixos:
+      chamado: '{{ chamado }}'
+      platform: '{{ platform  }}'
+      oracle_credencial: '{{ oracle_credencial }}'
+
+- name: Disparar Job Template para cada linha do CSV
+  uri:
+    url: "{{ aap_hostname }}/api/controller/v2/job_templates/{{ job_template_id }}/launch/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ aap_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      extra_vars: "{{ item | combine(extra_vars_fixos) }}"
+    status_code: [200, 201]
+    validate_certs: false
+    return_content: yes
+  loop: "{{ csv_list.list }}"
+  loop_control:
+    label: "{{ item }}"
+  register: launch_results
+
+- name: Extrair IDs dos jobs lançados
+  set_fact:
+    launched_jobs: >-
+      {{
+        launch_results.results
+        | map(attribute='json')
+        | map(attribute='job')
+        | list
+      }}
+
+- debug:
+    msg: "Jobs lançados: {{ launched_jobs }}"
