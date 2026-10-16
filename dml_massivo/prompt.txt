@@ -1,0 +1,191 @@
+Estou desenvolvendo uma automação Ansible para execução massiva de Oracle DML via AAP (Ansible Automation Platform).
+
+A arquitetura é a seguinte:
+
+1. Existe um Job Template "massivo" que recebe um CSV inteiro via Survey (variável csv_text).
+2. Esse Job Template valida o CSV.
+3. Ele faz UMA ÚNICA chamada para outro Job Template (ex.: "POC Oracle DML").
+4. O CSV completo é enviado para o template destino através de extra_vars.
+5. Quem percorre as linhas do CSV e executa os comandos Oracle é o template destino.
+6. Não existe loop no template massivo para cada linha.
+
+Objetivo:
+Descobrir por que o módulo community.general.read_csv está retornando lista vazia mesmo quando o CSV aparentemente possui registros.
+
+================================================================================
+CENÁRIO
+================================================================================
+
+Variáveis recebidas:
+
+chamado: PDST-2586055
+
+job_template_name: POC Oracle DML
+
+platform: JIRA
+
+oracle_credencial: HOTSDM
+
+csv_text:
+
+P_NUM_CHAMADO;P_ACTIVE;P_STATUS;P_DEPARTMENT
+1234;3213;123;DEPART
+3321;ACT;STAT;DEPART2
+1234;3213;123;DEPART
+3321;ACT;STAT;DEPART2
+1234;3213;123;DEPART
+3321;ACT;STAT;DEPART2
+1234;3213;123;DEPART
+3321;ACT;STAT;DEPART2
+1234;3213;123;DEPART
+
+================================================================================
+LÓGICA ATUAL
+================================================================================
+
+Validação inicial:
+
+- Verifica se csv_text existe.
+- Verifica se csv_text não está vazio.
+
+Mapeamento:
+
+- Gera csv_numeros_linhas.
+- Gera csv_cabecalho.
+
+Trecho:
+
+- name: Mapear linhas do CSV e cabeçalho
+  set_fact:
+    csv_numeros_linhas: >-
+      {% set n = [] %}
+      {% for l in csv_text.splitlines() %}
+      {% if l | trim | length > 0 %}
+      {% set _ = n.append(loop.index) %}
+      {% endif %}
+      {% endfor %}
+      {{ n }}
+
+    csv_cabecalho: >-
+      {{
+        (csv_text.splitlines()
+        | reject('match', '^\s*$')
+        | first)
+        | regex_replace('^﻿', '')
+        | split(';')
+        | map('trim')
+        | list
+      }}
+
+Após isso, é criado um arquivo temporário:
+
+- tempfile
+
+Depois o CSV é gravado:
+
+- name: Escrever CSV no arquivo temporário
+  copy:
+    content: >-
+      {{
+        ([csv_cabecalho | join(';')]
+        + (csv_text.splitlines() | reject('match', '^\s*$') | list)[1:])
+        | join('\n')
+      }}
+    dest: "{{ csv_temp.path }}"
+
+Depois ocorre a leitura:
+
+- name: Ler CSV do arquivo
+  community.general.read_csv:
+    path: "{{ csv_temp.path }}"
+    delimiter: ";"
+  register: csv_list
+
+================================================================================
+COMPORTAMENTO OBSERVADO
+================================================================================
+
+Os primeiros asserts passam com sucesso.
+
+Log:
+
+TASK [execute_mass : Validar se o CSV foi informado]
+
+ok: [localhost] =>
+{
+  "changed": false,
+  "msg": "All assertions passed"
+}
+
+TASK [execute_mass : Mapear linhas do CSV e cabeçalho]
+
+ok: [localhost]
+
+Portanto:
+
+- csv_text existe
+- csv_text não está vazio
+- splitlines() não gerou erro
+- csv_cabecalho foi identificado
+
+Porém o read_csv retorna:
+
+{
+  "dict": {},
+  "list": [],
+  "invocation": {
+    "module_args": {
+      "path": "/tmp/ansible.cc4ft3jr.csv",
+      "delimiter": ";",
+      "dialect": "excel",
+      "unique": true,
+      "key": null,
+      "fieldnames": null,
+      "skipinitialspace": null,
+      "strict": null
+    }
+  },
+  "_ansible_no_log": false,
+  "changed": false
+}
+
+Ou seja:
+
+list: []
+
+nenhum registro foi carregado.
+
+================================================================================
+HIPÓTESES JÁ LEVANTADAS
+================================================================================
+
+1. O CSV recebido pela Survey não é exatamente o que aparece visualmente.
+2. As quebras de linha podem estar sendo removidas antes de chegar ao playbook.
+3. O conteúdo pode estar sendo perdido durante a gravação do arquivo temporário.
+4. O arquivo temporário pode conter apenas o cabeçalho.
+5. Pode existir BOM UTF-8 ou caracteres ocultos.
+6. Pode haver comportamento específico do community.general.read_csv.
+7. O conteúdo exibido na Survey pode parecer multilinha, mas internamente chegar como uma única linha.
+
+================================================================================
+O QUE PRECISO
+================================================================================
+
+Analise toda a situação.
+
+Quero que você:
+
+1. Identifique a causa mais provável.
+2. Analise os possíveis problemas na construção do conteúdo enviado ao arquivo temporário.
+3. Avalie se existe algum comportamento conhecido do community.general.read_csv que explicaria "list: []".
+4. Revise toda a lógica de splitlines(), reject(), join() e copy().
+5. Identifique qualquer edge case relacionado a AAP Survey (Textarea).
+6. Sugira formas de instrumentação/debug para descobrir exatamente em qual etapa os registros estão desaparecendo.
+7. Caso encontre erro na lógica atual, forneça a correção completa.
+
+Considere que:
+- O CSV possui cabeçalho.
+- O CSV possui registros.
+- Os asserts iniciais passaram.
+- O módulo read_csv não gerou erro.
+- O resultado final foi list: [].
