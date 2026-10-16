@@ -42,10 +42,9 @@
     # Os valores das linhas de dados não são alterados.
     - name: Escrever CSV no arquivo temporário
       ansible.builtin.copy:
-        content: >-
-          {{ ([csv_cabecalho | join(';')]
-              + (csv_text.splitlines() | reject('match', '^\s*$') | list)[1:])
-             | join('\n') }}
+        # Aspas duplas de propósito: em bloco >- o '\n' vira texto literal
+        # e o arquivo fica com uma linha só (read_csv retorna list: []).
+        content: "{{ ([csv_cabecalho | join(';')] + (csv_text.splitlines() | reject('match', '^\\s*$') | list)[1:]) | join('\n') }}"
         dest: "{{ csv_temp.path }}"
         mode: "0600"
       no_log: true
