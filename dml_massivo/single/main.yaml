@@ -1,0 +1,223 @@
+# Execução Oracle DML.
+#  - Modo individual (como antes): binds P_ vêm da Survey.
+#  - Modo massivo: quando csv_text é recebido (enviado pelo Job Template
+#    massivo), cada linha do CSV é executada nesta mesma execução do job.
+# Uma falha em uma linha não interrompe as demais. Ao final é impresso um
+# relatório consolidado e o job falha se qualquer linha tiver falhado.
+
+- name: Valida se o script existe
+  ansible.builtin.stat:
+    path: "{{ script_path }}"
+  register: script_info
+
+- name: Falha se o script não existir
+  ansible.builtin.fail:
+    msg: "O script não foi inserido no arquivo script/script.sql"
+  when: not script_info.stat.exists or script_info.stat.size == 0
+
+- name: Extrair as variaveis dos scripts das Surveys
+  ansible.builtin.set_fact:
+    bind_vars: >-
+      {{
+        vars
+        | dict2items
+        | selectattr('key', 'match', '^P_')
+        | items2dict(key_name='key', value_name='value')
+      }}
+    # binds usados pelo script (:P_XXX) = colunas obrigatórias do CSV
+    binds_script: "{{ lookup('file', playbook_dir + '/' + script_path) | regex_findall(':(P_[A-Za-z0-9_]+)') | unique | list }}"
+    modo_massivo: "{{ csv_text is defined and (csv_text | trim | length > 0) }}"
+
+- name: Extrair variaveis de conexao
+  ansible.builtin.set_fact:
+    oracle_credentials: "{{ oracle_connections_raw | from_yaml }}"
+  no_log: true
+
+- name: Normalizar o nome da credencial
+  ansible.builtin.set_fact:
+    database_key: "{{ oracle_credencial | upper }}"
+  no_log: true
+
+- name: Definir credenciais Oracle com base na survey
+  ansible.builtin.set_fact:
+    ORACLE_USER: "{{ oracle_credentials.connections[oracle_credencial].ORACLE_USER }}"
+    ORACLE_PASSWORD: "{{ oracle_credentials.connections[oracle_credencial].ORACLE_PASSWORD }}"
+    ORACLE_DSN: "{{ oracle_credentials.connections[oracle_credencial].ORACLE_DSN }}"
+  no_log: true
+
+# ---------------------------------------------------------------------------
+# Modo individual: mantém o comportamento anterior (1 registro = binds da Survey)
+# ---------------------------------------------------------------------------
+- name: Preparar registro único (modo individual)
+  when: not (modo_massivo | bool)
+  block:
+    - name: Validar binds do script no modo individual
+      ansible.builtin.assert:
+        that:
+          - binds_script | difference(bind_vars.keys() | list) | length == 0
+        fail_msg: "Variáveis não informadas na Survey: {{ binds_script | difference(bind_vars.keys() | list) }}"
+
+    - name: Definir registro único
+      ansible.builtin.set_fact:
+        registros: "{{ [bind_vars] }}"
+        csv_numeros_linhas: []
+        csv_cabecalho: []
+        indices_invalidos: []
+        indices_vazios: []
+
+# ---------------------------------------------------------------------------
+# Modo massivo: lê o csv_text
+# ---------------------------------------------------------------------------
+- name: Preparar registros do CSV (modo massivo)
+  when: modo_massivo | bool
+  block:
+    # Números (no arquivo original) das linhas não vazias; a 1ª é o cabeçalho.
+    - name: Mapear linhas do CSV e cabeçalho
+      ansible.builtin.set_fact:
+        csv_numeros_linhas: >-
+          {% set n = [] %}{% for l in csv_text.splitlines() %}{% if l | trim | length > 0 %}{% set _ = n.append(loop.index) %}{% endif %}{% endfor %}{{ n }}
+        csv_cabecalho: >-
+          {{ (csv_text.splitlines() | reject('match', '^\s*$') | first)
+             | regex_replace('^﻿', '') | split(';') | map('trim') | list }}
+
+    - name: Validar cabeçalho do CSV
+      ansible.builtin.assert:
+        that:
+          - csv_cabecalho | select('equalto', '') | list | length == 0
+          - csv_cabecalho | map('upper') | unique | list | length == csv_cabecalho | length
+          - binds_script | difference(csv_cabecalho) | length == 0
+        fail_msg: >-
+          Cabeçalho inválido (linha {{ csv_numeros_linhas[0] }}): coluna sem nome,
+          coluna duplicada ou colunas obrigatórias ausentes
+          {{ binds_script | difference(csv_cabecalho) }}. Recebido: {{ csv_cabecalho }}
+
+    - name: Ler o CSV
+      block:
+        - name: Criar arquivo temporário com o CSV
+          ansible.builtin.tempfile:
+            state: file
+            suffix: .csv
+          register: csv_temp
+
+        # Grava sem as linhas em branco e com o cabeçalho normalizado (trim).
+        # Os valores das linhas de dados não são alterados.
+        - name: Escrever CSV no arquivo temporário
+          ansible.builtin.copy:
+            content: >-
+              {{ ([csv_cabecalho | join(';')]
+                  + (csv_text.splitlines() | reject('match', '^\s*$') | list)[1:])
+                 | join('\n') }}
+            dest: "{{ csv_temp.path }}"
+            mode: "0600"
+          no_log: true
+
+        - name: Ler CSV do arquivo
+          community.general.read_csv:
+            path: "{{ csv_temp.path }}"
+            delimiter: ";"
+          register: csv_list
+          no_log: true
+
+      always:
+        - name: Remover arquivo temporário
+          ansible.builtin.file:
+            path: "{{ csv_temp.path }}"
+            state: absent
+          when: csv_temp.path is defined
+
+    - name: Validar registros do CSV
+      ansible.builtin.assert:
+        that:
+          - csv_list.list | length > 0
+          - csv_list.list | length == (csv_numeros_linhas | length) - 1
+        fail_msg: >-
+          CSV sem registros, ou com campo entre aspas contendo quebra de linha
+          (não suportado). Registros lidos: {{ csv_list.list | length }}.
+
+    # Campos a menos => valores None; campos a mais => chave extra.
+    # Linhas com todos os campos vazios são ignoradas (não executadas).
+    - name: Classificar registros do CSV
+      ansible.builtin.set_fact:
+        registros: "{{ csv_list.list }}"
+        indices_invalidos: >-
+          {% set out = [] %}{% for row in csv_list.list %}{% if (row | length) != (csv_cabecalho | length) or (row.values() | select('none') | list | length) > 0 %}{% set _ = out.append(loop.index0) %}{% endif %}{% endfor %}{{ out }}
+        indices_vazios: >-
+          {% set out = [] %}{% for row in csv_list.list %}{% if (row | length) == (csv_cabecalho | length) and (row.values() | select('none') | list | length) == 0 and (row.values() | map('trim') | reject('equalto', '') | list | length) == 0 %}{% set _ = out.append(loop.index0) %}{% endif %}{% endfor %}{{ out }}
+
+# ---------------------------------------------------------------------------
+# Execução: uma tentativa Oracle por registro, sem abortar nas falhas
+# ---------------------------------------------------------------------------
+- name: Executar oracle DML
+  dml.oracle_dml.execute_script:
+    database: '{{ ORACLE_DSN }}'
+    username: '{{ ORACLE_USER }}'
+    password: '{{ ORACLE_PASSWORD }}'
+    script: '{{ lookup("file", playbook_dir + "/" + script_path) }}'
+    binds: "{{ item | dict2items | selectattr('key', 'match', '^P_') | items2dict }}"
+  loop: "{{ registros }}"
+  loop_control:
+    index_var: idx
+    label: "{{ 'linha ' ~ csv_numeros_linhas[idx + 1] if modo_massivo | bool else 'individual' }}"
+  when: idx not in (indices_invalidos + indices_vazios)
+  register: result
+  ignore_errors: true
+  no_log: true
+
+- name: Totalizar resultado
+  ansible.builtin.set_fact:
+    total_sucesso: "{{ result.results | reject('skipped') | reject('failed') | list | length }}"
+    total_falha_oracle: "{{ result.results | reject('skipped') | select('failed') | list | length }}"
+
+- name: Imprimir result
+  ansible.builtin.debug:
+    msg: "{{ item.output.splitlines() if item.output is defined else [] }}"
+  loop: "{{ result.results }}"
+  loop_control:
+    index_var: idx
+    label: "{{ 'linha ' ~ csv_numeros_linhas[idx + 1] if modo_massivo | bool else 'individual' }}"
+  when: item is not skipped and item is not failed
+
+- name: Relatório consolidado
+  ansible.builtin.debug:
+    msg: |-
+      ===================== RELATÓRIO DML ORACLE =====================
+      Chamado ............: {{ chamado | default('-') }}
+      Plataforma .........: {{ platform | default('-') }}
+      Credencial Oracle ..: {{ oracle_credencial }}
+      Modo ...............: {{ 'massivo (CSV)' if modo_massivo | bool else 'individual' }}
+      Linhas encontradas .: {{ registros | length }}
+      Linhas processadas .: {{ (registros | length) - (indices_invalidos | length) - (indices_vazios | length) }}
+      Sucessos ...........: {{ total_sucesso }}
+      Falhas .............: {{ (total_falha_oracle | int) + (indices_invalidos | length) }}
+      Ignoradas ..........: {{ indices_vazios | length }}{% if indices_vazios | length > 0 %} (todos os campos vazios: linhas {% for i in indices_vazios %}{{ csv_numeros_linhas[i + 1] }}{{ ', ' if not loop.last }}{% endfor %}){% endif %}
+
+      ------------------------- detalhe por linha -----------------------
+      {% for r in result.results %}
+      {% set linha = csv_numeros_linhas[loop.index] if modo_massivo | bool else '-' %}
+      {% set ident = (r.item[csv_cabecalho[0]] if modo_massivo | bool else chamado | default('-')) | default('-', true) | string | truncate(50) %}
+      {% if loop.index0 in indices_invalidos %}
+      FALHA   | linha {{ linha }} | {{ ident }} | quantidade de campos diferente do cabeçalho ({{ csv_cabecalho | length }}); não executada
+      {% elif loop.index0 in indices_vazios %}
+      IGNORADA| linha {{ linha }} | todos os campos vazios
+      {% elif r is failed %}
+      FALHA   | linha {{ linha }} | {{ ident }} | {{ r.msg | default('erro sem mensagem') | string | replace('\n', ' ') | truncate(200) }}
+      {% else %}
+      SUCESSO | linha {{ linha }} | {{ ident }}
+      {% endif %}
+      {% endfor %}
+      ================================================================
+
+- name: Registrar estatísticas
+  ansible.builtin.set_stats:
+    data:
+      dml_total: "{{ registros | length }}"
+      dml_sucessos: "{{ total_sucesso }}"
+      dml_falhas: "{{ (total_falha_oracle | int) + (indices_invalidos | length) }}"
+      dml_ignorados: "{{ indices_vazios | length }}"
+
+- name: Falhar o job se algum registro falhou
+  ansible.builtin.fail:
+    msg: >-
+      {{ (total_falha_oracle | int) + (indices_invalidos | length) }} registro(s)
+      com falha. Veja o relatório consolidado acima.
+  when: (total_falha_oracle | int) + (indices_invalidos | length) > 0

@@ -1,0 +1,258 @@
+# Massivo: valida o CSV da Survey e faz UMA ÚNICA chamada de lançamento do
+# Job Template de destino (POC Oracle DML), enviando o CSV completo em csv_text.
+# Quem percorre as linhas e executa o Oracle é o próprio destino.
+
+# ---------------------------------------------------------------------------
+# Validação do CSV
+# ---------------------------------------------------------------------------
+- name: Validar se o CSV foi informado
+  ansible.builtin.assert:
+    that:
+      - csv_text is defined
+      - csv_text | trim | length > 0
+    fail_msg: "CSV vazio: informe o conteúdo do CSV na Survey (csv_text)."
+
+# Números (no arquivo original) das linhas não vazias; a 1ª é o cabeçalho.
+- name: Mapear linhas do CSV e cabeçalho
+  ansible.builtin.set_fact:
+    csv_numeros_linhas: >-
+      {% set n = [] %}{% for l in csv_text.splitlines() %}{% if l | trim | length > 0 %}{% set _ = n.append(loop.index) %}{% endif %}{% endfor %}{{ n }}
+    csv_cabecalho: >-
+      {{ (csv_text.splitlines() | reject('match', '^\s*$') | first)
+         | regex_replace('^﻿', '') | split(';') | map('trim') | list }}
+
+- name: Validar cabeçalho do CSV (colunas sem nome ou duplicadas)
+  ansible.builtin.assert:
+    that:
+      - csv_cabecalho | select('equalto', '') | list | length == 0
+      - csv_cabecalho | map('upper') | unique | list | length == csv_cabecalho | length
+    fail_msg: >-
+      Cabeçalho inválido (linha {{ csv_numeros_linhas[0] }}): há coluna sem nome
+      ou coluna duplicada. Recebido: {{ csv_cabecalho }}
+
+- name: Ler o CSV
+  block:
+    - name: Criar arquivo temporário com o CSV da survey
+      ansible.builtin.tempfile:
+        state: file
+        suffix: .csv
+      register: csv_temp
+
+    # Grava sem as linhas em branco e com o cabeçalho normalizado (trim).
+    # Os valores das linhas de dados não são alterados.
+    - name: Escrever CSV no arquivo temporário
+      ansible.builtin.copy:
+        content: >-
+          {{ ([csv_cabecalho | join(';')]
+              + (csv_text.splitlines() | reject('match', '^\s*$') | list)[1:])
+             | join('\n') }}
+        dest: "{{ csv_temp.path }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Ler CSV do arquivo
+      community.general.read_csv:
+        path: "{{ csv_temp.path }}"
+        delimiter: ";"
+      register: csv_list
+      no_log: true
+
+  always:
+    - name: Remover arquivo temporário
+      ansible.builtin.file:
+        path: "{{ csv_temp.path }}"
+        state: absent
+      when: csv_temp.path is defined
+
+- name: Validar registros do CSV
+  ansible.builtin.assert:
+    that:
+      - csv_list.list | length > 0
+      - csv_list.list | length == (csv_numeros_linhas | length) - 1
+    fail_msg: >-
+      CSV sem registros, ou com campo entre aspas contendo quebra de linha
+      (não suportado). Registros lidos: {{ csv_list.list | length }}.
+
+# Linha com campos a menos => valores None; campos a mais => chave extra.
+- name: Identificar linhas com quantidade incorreta de campos
+  ansible.builtin.set_fact:
+    csv_linhas_invalidas: >-
+      {% set out = [] %}{% for row in csv_list.list %}{% if (row | length) != (csv_cabecalho | length) or (row.values() | select('none') | list | length) > 0 %}{% set _ = out.append(csv_numeros_linhas[loop.index]) %}{% endif %}{% endfor %}{{ out }}
+
+- name: Falhar se houver linhas com quantidade incorreta de campos
+  ansible.builtin.fail:
+    msg: >-
+      Lote rejeitado, nenhum job foi lançado. Linhas do CSV com quantidade de
+      campos diferente do cabeçalho ({{ csv_cabecalho | length }} campos):
+      {{ csv_linhas_invalidas | join(', ') }}
+  when: csv_linhas_invalidas | length > 0
+
+# ---------------------------------------------------------------------------
+# Job Template de destino e Survey
+# (chamadas com no_log porque o header Authorization levaria o token ao log)
+# ---------------------------------------------------------------------------
+- name: Obter Organization
+  ansible.builtin.uri:
+    url: "{{ aap_hostname }}/api/controller/v2/job_templates/{{ tower_job_template_id }}/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ aap_token }}"
+      Content-Type: application/json
+    validate_certs: false
+    return_content: true
+  register: job_template_massivo
+  failed_when: false
+  no_log: true
+
+- name: Validar resposta - Organization
+  ansible.builtin.fail:
+    msg: >-
+      Falha ao consultar o Job Template massivo {{ tower_job_template_id }}:
+      HTTP {{ job_template_massivo.status | default('sem resposta') }}
+      {{ job_template_massivo.json.detail | default(job_template_massivo.msg | default('')) }}
+      (401 = token inválido/expirado, 403 = sem permissão, -1 = falha de conexão)
+  when: job_template_massivo.status | default(-1) | int != 200
+
+- name: Obter Job Template
+  ansible.builtin.uri:
+    url: "{{ aap_hostname }}/api/controller/v2/job_templates/?name={{ job_template_name | urlencode }}&organization={{ job_template_massivo.json.organization }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ aap_token }}"
+      Content-Type: application/json
+    validate_certs: false
+    return_content: true
+  register: jt_list
+  failed_when: false
+  no_log: true
+
+- name: Falhar se o Job Template não for encontrado
+  ansible.builtin.fail:
+    msg: >-
+      Job Template '{{ job_template_name }}' não encontrado na organização
+      {{ job_template_massivo.json.organization }}
+      (HTTP {{ jt_list.status | default('sem resposta') }}).
+  when: jt_list.status | default(-1) | int != 200 or jt_list.json.count | int == 0
+
+- name: Obter Job Template ID
+  ansible.builtin.set_fact:
+    job_template_id: "{{ jt_list.json.results[0].id }}"
+
+- name: Obter Job Template
+  ansible.builtin.uri:
+    url: "{{ aap_hostname }}/api/controller/v2/job_templates/{{ job_template_id }}/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ aap_token }}"
+      Content-Type: application/json
+    validate_certs: false
+    return_content: true
+  register: jt_api
+  failed_when: false
+  no_log: true
+
+- name: Garantir que o Job Template possui survey
+  ansible.builtin.assert:
+    that:
+      - jt_api.status | default(-1) | int == 200
+      - jt_api.json.survey_enabled | default(false)
+      - jt_api.json.related.survey_spec is defined
+    fail_msg: >-
+      O Job Template {{ job_template_id }} não possui survey habilitada
+      (HTTP {{ jt_api.status | default('sem resposta') }}).
+
+- name: Obter survey do Job Template via API
+  ansible.builtin.uri:
+    url: "{{ aap_hostname }}/api/controller/v2/job_templates/{{ job_template_id }}/survey_spec/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ aap_token }}"
+      Content-Type: application/json
+    validate_certs: false
+    return_content: true
+  register: survey_api
+  failed_when: false
+  no_log: true
+
+- name: Validar resposta - survey
+  ansible.builtin.fail:
+    msg: "Falha ao obter a survey do Job Template {{ job_template_id }}: HTTP {{ survey_api.status | default('sem resposta') }}"
+  when: survey_api.status | default(-1) | int != 200
+
+- name: Extrair variáveis da survey
+  ansible.builtin.set_fact:
+    survey_vars: "{{ survey_api.json.spec | map(attribute='variable') | list }}"
+    survey_vars_p: "{{ survey_api.json.spec | map(attribute='variable') | select('match', '^P_') | list }}"
+
+- name: Mostrar surveys dinamicas
+  ansible.builtin.debug:
+    var: survey_vars_p
+
+- name: Validar se todas as surveys P_ estão no CSV
+  ansible.builtin.assert:
+    that:
+      - survey_vars_p | difference(csv_cabecalho) | length == 0
+    fail_msg: >-
+      CSV não contém todas as variáveis exigidas pelo template.
+      Faltando: {{ survey_vars_p | difference(csv_cabecalho) }}.
+      Recebido (CSV): {{ csv_cabecalho }}
+
+# Sem a pergunta csv_text na Survey do destino a API descarta o CSV em silêncio.
+- name: Validar se o destino aceita a variável csv_text
+  ansible.builtin.assert:
+    that:
+      - "'csv_text' in survey_vars or (jt_api.json.ask_variables_on_launch | default(false))"
+    fail_msg: >-
+      A Survey do Job Template '{{ job_template_name }}' não possui a pergunta
+      csv_text (Textarea). Crie a pergunta antes de usar o massivo.
+
+# ---------------------------------------------------------------------------
+# Lançamento ÚNICO
+# ---------------------------------------------------------------------------
+- name: Variaveis fixas do template
+  ansible.builtin.set_fact:
+    extra_vars_fixos:
+      chamado: '{{ chamado }}'
+      platform: '{{ platform }}'
+      oracle_credencial: '{{ oracle_credencial }}'
+
+- name: Disparar Job Template uma única vez com o CSV completo
+  ansible.builtin.uri:
+    url: "{{ aap_hostname }}/api/controller/v2/job_templates/{{ job_template_id }}/launch/"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ aap_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      extra_vars: "{{ extra_vars_fixos | combine({'csv_text': csv_text}) }}"
+    validate_certs: false
+    return_content: true
+  register: launch_result
+  failed_when: false
+  no_log: true
+
+- name: Validar lançamento
+  ansible.builtin.fail:
+    msg: >-
+      Falha ao lançar o Job Template '{{ job_template_name }}':
+      HTTP {{ launch_result.status | default('sem resposta') }}
+      {{ launch_result.json.detail | default('') }}
+      {{ launch_result.json.variables_needed_to_start | default('') }}
+      {{ 'Confira no AAP se o job foi criado antes de reenviar.' if launch_result.status | default(-1) | int not in [400, 401, 403, 404] else '' }}
+  when: launch_result.status | default(-1) | int not in [200, 201]
+
+- name: Falhar se a API descartou variáveis
+  ansible.builtin.fail:
+    msg: >-
+      O job {{ launch_result.json.job }} foi criado, mas a API descartou as
+      variáveis {{ launch_result.json.ignored_fields.extra_vars.keys() | list }}.
+      Cancele o job e ajuste a Survey do destino.
+  when: launch_result.json.ignored_fields.extra_vars | default({}) | length > 0
+
+- name: Job lançado
+  ansible.builtin.debug:
+    msg: >-
+      Job lançado: {{ launch_result.json.job }} | registros enviados:
+      {{ csv_list.list | length }}. O resultado de cada registro está no log
+      desse job.
