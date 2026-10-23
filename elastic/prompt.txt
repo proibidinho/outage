@@ -1,0 +1,178 @@
+Atue como um arquiteto Elastic Enterprise experiente e elabore um plano de implantação completo para um cluster Elasticsearch 9.5 Self-Managed Enterprise em ambiente on-premises.
+
+Objetivo do cluster:
+
+- Ingestão estimada: 5 TB/dia
+- Elastic Enterprise 12 ERUs
+- Ambiente novo (greenfield)
+- Instalação manual
+- Alta disponibilidade
+- F5 como balanceador
+
+Infraestrutura disponível:
+
+MASTER NODES
+- 3 servidores
+- 4 vCPU
+- 7.5 GB RAM
+- 200 GB storage
+
+HOT NODES
+- 8 servidores
+- 32 vCPU
+- 62.3 GB RAM
+- 2 TB úteis por servidor
+
+COLD NODES
+- 2 servidores
+- 16 vCPU
+- 62.3 GB RAM
+- 10 TB por servidor
+
+FROZEN NODE
+- 1 servidor
+- 8 vCPU
+- 31.1 GB RAM
+- 3 TB storage
+
+ML NODES
+- 2 servidores
+- 32 vCPU
+- 16 GB RAM
+
+KIBANA NODES
+- 3 servidores
+- 4 vCPU
+- 7.5 GB RAM
+
+INTEGRATION NODES
+- 2 servidores
+- 4 vCPU
+- 6 GB RAM
+
+Política de retenção:
+
+- HOT: 0 a 3 dias
+- COLD: 3 a 9 dias
+- FROZEN: 10 a 30 dias
+
+Segurança:
+
+- Security habilitado
+- TLS interno entre nós utilizando elasticsearch-certutil
+- Não utilizar CA corporativa para transport layer
+- Certificados corporativos apenas no F5
+
+VIPs:
+
+- elk.claro.com.br
+- kibana.claro.com.br
+
+O F5 fará TLS termination utilizando certificados corporativos.
+
+Requisitos adicionais:
+
+- Audit Logging habilitado
+- Elasticsearch Keystore obrigatório
+- Kibana Keystore obrigatório
+- Nada em texto plano
+- Vault corporativo ainda não disponível
+- SSO será implementado posteriormente por outro time
+- Licença Enterprise será instalada posteriormente
+
+Preciso que o documento contenha:
+
+1. Ordem exata de instalação dos componentes
+2. Formação inicial do cluster
+3. Bootstrap dos masters
+4. Configuração das roles de cada servidor
+5. Configuração completa do elasticsearch.yml para cada tipo de nó
+6. Configuração completa do kibana.yml
+7. Configurações de JVM Heap por role
+8. Configurações de Garbage Collector recomendadas
+9. Parâmetros Linux necessários
+10. Sysctl recomendados
+11. vm.max_map_count
+12. Transparent Huge Pages
+13. Swap
+14. Limites de file descriptors
+15. Limites de processos
+16. Requisitos de filesystem
+17. Estratégia de montagem dos discos
+18. Estratégia de shard allocation
+19. Estratégia de ILM
+20. Estratégia de Data Streams
+21. Estratégia de retenção Hot -> Cold -> Frozen
+22. Estratégia de snapshots
+23. Estratégia de recuperação de desastre
+24. Estratégia de monitoramento
+25. Estratégia de observabilidade
+26. Configuração do Fleet Server nos Integration Nodes
+27. Configuração do Cloud Connect
+28. Aplicação da licença Enterprise
+29. Hardening completo
+30. Checklist de pré-instalação
+31. Checklist de pós-instalação
+32. Checklist de validação de performance
+33. Checklist de segurança
+34. Checklist operacional para entrada em produção
+
+Além do plano, explique o motivo técnico de cada configuração recomendada e apresente os riscos caso ela não seja implementada.
+
+
+
+Seguem abaixo os servidores e seus recursos
+IP;HOSTNAME;DESCRICAO;VCPU;MEMORIA_GB;TOTAL_STORAGE_GB;DISCOS
+10.29.88.185;cbl2am05949.claro.com.br;Kibana;4;7.5;200;sda:60GB sdb:40GB sdc:100GB
+10.29.88.186;cbl2am34537.claro.com.br;Kibana;4;7.5;200;sda:60GB sdb:40GB sdc:100GB
+10.29.88.187;cbl2am16165.claro.com.br;Kibana;4;7.5;200;sda:60GB sdb:40GB sdc:100GB
+10.29.88.188;cbl2am59521.claro.com.br;Hot;32;62.3;2148;sda:60GB sdb:40GB sdc:1024GB sdd:1024GB
+10.29.88.189;cbl2am82385.claro.com.br;Hot;32;62.3;2148;sda:60GB sdb:40GB sdc:1024GB sdd:1024GB
+10.29.88.190;cbl2am33867.claro.com.br;Hot;32;62.3;2148;sda:1024GB sdb:1024GB sdc:60GB sdd:40GB
+10.29.88.202;cbl2am05740.claro.com.br;Hot;32;62.3;2148;sda:40GB sdb:1024GB sdc:1024GB sdd:60GB
+10.29.88.203;cbl2am04384.claro.com.br;Hot;32;62.3;2148;sda:60GB sdb:40GB sdc:1024GB sdd:1024GB
+10.29.88.204;cbl2am22244.claro.com.br;Hot;32;62.3;2148;sda:60GB sdb:40GB sdc:1024GB sdd:1024GB
+10.29.88.205;cbl2am62244.claro.com.br;Hot;32;62.3;2148;sda:60GB sdb:40GB sdc:1024GB sdd:1024GB
+10.29.88.206;cbl2am46040.claro.com.br;Hot;32;62.3;2148;sda:60GB sdb:40GB sdc:1024GB sdd:1024GB
+10.29.88.209;cbl2am96314.claro.com.br;ML;32;16;150;sda:60GB sdb:50GB sdc:40GB
+10.29.88.210;cbl2am86556.claro.com.br;ML;32;16;150;sda:60GB sdb:50GB sdc:40GB
+10.29.88.211;cbl2am91456.claro.com.br;Frozen;8;31.1;3172;sda:60GB sdb:40GB sdc:1024GB sdd:1024GB sde:1024GB
+10.29.88.212;cbl2am24120.claro.com.br;Cold;16;62.3;10340;sda:60GB sdb:40GB sdc:2048GB sdd:2048GB sde:2048GB sdf:2048GB sdg:2048GB
+10.29.88.213;cbl2am78817.claro.com.br;Cold;16;62.3;10340;sda:2048GB sdb:60GB sdc:40GB sdd:2048GB sde:2048GB sdf:2048GB sdg:2048GB
+10.29.88.216;cbl2am26284;Integration;4;6;200;sda:60GB sdb:40GB sdc:100GB
+10.29.88.217;cbl2am57168;Integration;4;6;200;sda:60GB sdb:40GB sdc:100GB
+10.29.88.223;cbl2am53296.corp.clarobr;Master;4;7.5;200;sda:60GB sdb:40GB sdc:50GB sdd:50GB
+10.29.88.224;cbl2am52901.corp.clarobr;Master;4;7.5;200;sda:60GB sdb:40GB sdc:50GB sdd:50GB
+10.29.88.226;cbl2am94434.corp.clarobr;Master;4;7.5;200;sda:60GB sdb:40GB sdc:50GB sdd:50GB
+
+
+ROLE         QTD   vCPU   RAM TOTAL   STORAGE TOTAL
+Master         3     12      22.5 GB         600 GB
+Hot            8    256     498.4 GB      17.2 TB
+Cold           2     32     124.6 GB      20.6 TB
+Frozen         1      8      31.1 GB       3.1 TB
+ML             2     64      32.0 GB       300 GB
+Kibana         3     12      22.5 GB       600 GB
+Integration    2      8      12.0 GB       400 GB
+--------------------------------------------------
+TOTAL         21    392     743.1 GB      42.8 TB
+
+Links de referencia
+https://galaxy.ansible.com/ui/repo/published/community/elastic/docs/
+https://registry.terraform.io/providers/elastic/elasticstack/latest/docs
+https://www.elastic.co/docs/deploy-manage/deploy/self-managed/installing-elasticsearch
+https://www.elastic.co/docs/deploy-manage/deploy/self-managed/tutorial-self-managed-install
+https://www.elastic.co/docs/deploy-manage/deploy/self-managed/install-kibana
+https://www.elastic.co/docs/deploy-manage/production-guidance/optimize-performance/size-shards
+https://www.elastic.co/docs/deploy-manage/tools/snapshot-and-restore/self-managed
+https://www.elastic.co/docs/deploy-manage/cloud-connect
+https://www.elastic.co/docs/deploy-manage/monitor/autoops
+https://www.elastic.co/docs/deploy-manage/distributed-architecture/clusters-nodes-shards/node-roles
+https://www.elastic.co/docs/deploy-manage/distributed-architecture/shard-allocation-relocation-recovery/shard-allocation-awareness
+https://www.elastic.co/docs/deploy-manage/security/set-up-basic-security
+https://www.elastic.co/docs/deploy-manage/users-roles/cluster-or-deployment-auth/user-authentication
+https://www.elastic.co/docs/manage-data/lifecycle/index-lifecycle-management
+https://www.elastic.co/docs/deploy-manage/tools/snapshot-and-restore/create-snapshots
+https://www.elastic.co/docs/deploy-manage/users-roles/cluster-or-deployment-auth/user-roles
+https://www.elastic.co/docs/deploy-manage/users-roles/cluster-or-deployment-auth/mapping-users-groups-to-roles
+https://www.elastic.co/docs/deploy-manage/users-roles/cluster-or-deployment-auth/kibana-privileges
