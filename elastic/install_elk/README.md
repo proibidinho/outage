@@ -13,7 +13,7 @@ Projeto Ansible enxuto para o AAP. Versão fixada em **9.5.5** (`group_vars/all.
 ```
 inventory.yml          <- só os servidores e os grupos
 group_vars/            <- variáveis do ambiente: all.yml (acao, versão, bastion, F5, Fleet) e um arquivo por grupo
-                          (es_master.yml, es_hot.yml, ...: papéis do nó, heap e discos)
+                          (es_master.yml, es_hot.yml, ...: papéis do nó, heap e discos); elastic.yml = como entrar nos servidores (aiops + salto pelo bastion); bastion.yml = como entrar no bastion
 vault.yml.example      <- modelo dos 7 segredos (crie o vault.yml a partir dele)
 ansible.cfg
 collections/requirements.yml     <- community.general (lvg, lvol, filesystem) e ansible.posix (mount)
@@ -37,17 +37,21 @@ AAP  ->  exec node (Lapa)  ->  bastion 10.29.148.161  ->  21 servidores do clust
 ```
 
 **Uma vez (`acao=usuario`):**
-1. O bastion (onde o exec node já entra como root) cria o usuário **`aiops` nele mesmo** e gera o par de chaves dele.
+1. O exec node entra no bastion **como root** e, no bastion: cria o `aiops`, libera **sudo completo sem senha**, autoriza para o `aiops`
+   a **mesma chave que o exec node já usa para entrar como root** (assim o exec node passa a entrar como `aiops`) e gera o par de chaves do `aiops`.
 2. O bastion entra como root em cada servidor, cria o `aiops` (senha bloqueada, sudo sem senha) e grava a **chave pública do `aiops` do bastion**
    em `/home/aiops/.ssh/authorized_keys`.
 
 **Em todas as outras ações** (`precheck`, `ensaio`, `instalar`, `validar`): o playbook busca a chave privada do `aiops` no bastion,
-guarda uma cópia temporária no job (permissão 0600), entra nos servidores **como `aiops`** passando pelo bastion (`ProxyCommand` do
-`group_vars/all.yml`) e apaga a cópia no fim. O mantenedor usa a mesma chave: entra no bastion, faz `sudo -iu aiops` e `ssh` para o servidor.
+guarda uma cópia temporária no job (permissão 0600), entra no bastion **como `aiops`** e nos servidores **como `aiops`**
+(`ProxyCommand` do `group_vars/elastic.yml`) e apaga a cópia no fim. O mantenedor usa a mesma chave: entra no bastion, faz `sudo -iu aiops` e `ssh` para o servidor.
 
 - Nada é instalado nem copiado no bastion, e nada muda no AAP além do Inventory e do Job Template.
 - **Premissa:** o job consegue entrar no bastion como root com a chave que o exec node já usa (como nos seus outros jobs). Se o job
   não enxergar essa chave, informe o caminho dela em `bastion_key_file` (veja o comentário no `group_vars/all.yml`).
+- **Qual chave entra como `aiops` no bastion?** Por padrão, as que estão em `/root/.ssh/authorized_keys` do bastion (são as que já entram como
+  root). Para autorizar só a do exec node, preencha `exec_node_public_key` em `group_vars/all.yml`.
+- O login do root não é alterado em nenhum servidor. O `usuario` pode ser repetido sem duplicar usuário, chave nem regra de sudo.
 - Rede: porta 22 liberada do `10.29.148.161` para os 21 servidores.
 - A chave privada do `aiops` passa do bastion para o job a cada execução (temporária, só dentro do job). Se o AAP registrar a saída,
   as tarefas que a manipulam usam `no_log`.

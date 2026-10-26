@@ -11,8 +11,6 @@ all:
       hosts:
         bastion:
           ansible_host: "{{ bastion_host }}"
-          ansible_user: "{{ bastion_user }}"
-          ansible_ssh_common_args: ""        # o bastion e acessado direto, sem passar por ele mesmo
 
     elastic:
       children:

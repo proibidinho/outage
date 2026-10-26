@@ -31,18 +31,14 @@ aiops_user: aiops
 aiops_key_path: "/home/{{ aiops_user }}/.ssh/id_ed25519"      # chave privada do aiops, NO BASTION
 aiops_key_local: /tmp/elastic-certs-staging/aiops_key         # copia temporaria dentro do job
 bastion_host: 10.29.148.161              # vazio = conexao direta, sem bastion
-bastion_user: root
+bastion_user: root                       # so no acao=usuario (bootstrap). Depois o exec node entra como aiops
+# Chave publica com que o exec node entra no bastion (a mesma que hoje entra como root), para ele passar a
+# entrar como aiops. Vazio = usa as chaves de /root/.ssh/authorized_keys do bastion. Ex.: "ssh-ed25519 AAAA... exec-node"
+exec_node_public_key: ""
 # Chave usada para entrar no bastion como root: por padrao, a que o exec node ja usa (vazio).
 # Se o job nao a enxergar, informe aqui o caminho dela DENTRO do job (veja o README).
 bastion_key_file: ""
-# Usuario de conexao nos servidores: sempre aiops (vale mesmo que a credencial do job tenha outro usuario).
-ansible_user: "{{ aiops_user }}"
-# Aplicado a todos os servidores: a conexao SSH atravessa o bastion.
-ansible_ssh_common_args: >-
-  {{ '' if bastion_host | length == 0 else
-     '-o ProxyCommand="ssh -W %h:%p -q -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null'
-     ~ (' -o IdentitiesOnly=yes -i ' ~ bastion_key_file if bastion_key_file | length > 0 else '')
-     ~ ' ' ~ bastion_user ~ '@' ~ bastion_host ~ '"' }}
+# (O usuario e o salto pelo bastion usados para entrar nos servidores estao em group_vars/elastic.yml.)
 
 # ------------------------------------------------------------ nomes publicados no F5
 es_public_name: elastic.claro.com.br
