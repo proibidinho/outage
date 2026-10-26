@@ -1,0 +1,10 @@
+---
+# =============================================================================
+#  Como ENTRAR nos 21 servidores (grupo elastic): atravessando o bastion, como root.
+#  (O bastion nao esta neste grupo: e acessado direto.)
+# =============================================================================
+ansible_ssh_common_args: >-
+  {{ '' if bastion_host | length == 0 else
+     '-o ProxyCommand="ssh -W %h:%p -q -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null'
+     ~ (' -o IdentitiesOnly=yes -i ' ~ bastion_key_file if bastion_key_file | length > 0 else '')
+     ~ ' ' ~ bastion_user ~ '@' ~ bastion_host ~ '"' }}

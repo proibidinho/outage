@@ -1,0 +1,6 @@
+---
+# 8 nos hot: recebem escrita; data_content e obrigatorio (indices de sistema)
+es_node_roles: [data_hot, data_content, ingest]
+es_heap_size: 30g                    # 62 GB de RAM (< 50% e abaixo de 31g)
+storage_volumes:
+  - {name: esdata, vg: vg_esdata, lv: lv_esdata, mount: /var/lib/elasticsearch, size_gb: 1024, count: 2}

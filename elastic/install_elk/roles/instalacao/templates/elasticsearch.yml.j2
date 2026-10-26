@@ -1,0 +1,38 @@
+# {{ ansible_managed }}
+# Somente configuracao de instalacao: identidade, papeis, descoberta, caminhos e seguranca basica.
+{% set masters_ip = groups['es_master'] | map('extract', hostvars, 'ansible_host') | list %}
+{% set masters_nome = groups['es_master'] | map('regex_replace', '[.].*$', '') | list %}
+cluster.name: {{ es_cluster_name }}
+node.name: {{ inventory_hostname.split('.')[0] }}
+node.roles: {{ es_node_roles | to_json }}
+
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+
+# memoria do JVM travada na RAM (exige LimitMEMLOCK=infinity, ver infra/sistema.yml)
+bootstrap.memory_lock: true
+
+network.host: {{ ansible_host }}
+http.port: 9200
+transport.port: 9300
+
+# descoberta pelos IPs dos 3 masters (nao depende do DNS)
+discovery.seed_hosts: {{ masters_ip | map('regex_replace', '$', ':9300') | list | to_json }}
+{% if es_render_initial_masters | default(false) | bool %}
+# TEMPORARIO: so na formacao inicial do cluster; removido automaticamente depois do bootstrap.
+cluster.initial_master_nodes: {{ masters_nome | to_json }}
+{% endif %}
+
+xpack.security.enabled: true
+xpack.security.enrollment.enabled: false
+
+# transporte (no <-> no): TLS mutuo, certificado por no, CA propria
+xpack.security.transport.ssl.enabled: true
+xpack.security.transport.ssl.verification_mode: full
+xpack.security.transport.ssl.client_authentication: required
+xpack.security.transport.ssl.keystore.path: {{ es_tls_dir }}/transport.p12
+xpack.security.transport.ssl.truststore.path: {{ es_tls_dir }}/transport.p12
+
+# HTTP (clientes, Kibana, F5 -> Elasticsearch): certificado da CA HTTP interna
+xpack.security.http.ssl.enabled: true
+xpack.security.http.ssl.keystore.path: {{ es_tls_dir }}/http.p12

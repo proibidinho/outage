@@ -1,0 +1,6 @@
+---
+# No AAP, o projeto instala estas collections sozinho (credencial Galaxy/Automation Hub na organizacao).
+# Em linha de comando:  ansible-galaxy collection install -r collections/requirements.yml
+collections:
+  - name: community.general   # lvg, lvol, filesystem
+  - name: ansible.posix       # mount

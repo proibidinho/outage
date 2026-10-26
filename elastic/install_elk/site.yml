@@ -1,0 +1,132 @@
+---
+# =============================================================================
+#  site.yml  —  UM unico playbook. Cada ROLE abaixo tem um "when" que olha a variavel  acao
+#  (pergunta da survey do AAP, ou  -e acao=...  na linha de comando):
+#
+#    acao=precheck   role precheck               confere o ambiente e o plano de discos, somente leitura   <- padrao
+#    acao=instalar   roles precheck + infra + instalacao   discos, sistema, Elasticsearch, Kibana, Fleet
+#    acao=validar    role validacao              confere o ambiente instalado, somente leitura
+#
+#  Na acao "instalar", a variavel  componentes  (group_vars/all.yml) escolhe o que instalar:
+#    -e '{"componentes": ["kibana"]}'      so o Kibana (exemplo)
+#  Cluster Elasticsearch NOVO:  -e es_bootstrap_allowed=true   (so na primeira instalacao)
+#
+#  Fluxo de conexao (tudo como root): AAP -> exec node -> bastion -> servidores (veja group_vars/all.yml).
+#  O "hosts:" de cada play diz EM QUAIS servidores; o "when" de cada role diz QUANDO.
+# =============================================================================
+
+- name: "Conferir os valores de acao e componentes"
+  hosts: elastic
+  connection: local
+  run_once: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.assert:
+        that:
+          - acao in ['precheck', 'instalar', 'validar']
+          - componentes | difference(['elasticsearch', 'kibana', 'fleet']) | length == 0
+        fail_msg: "acao deve ser precheck | instalar | validar; componentes so aceita elasticsearch, kibana, fleet."
+        quiet: true
+
+# ---- chave para entrar nos servidores atravessando o bastion (apagada no fim) ----------------------
+- name: "Acesso: copiar a chave do bastion para o job"
+  hosts: elastic
+  gather_facts: false
+  roles:
+    - role: acesso
+      fase: buscar
+      when: chave_bastion_vms | length > 0
+
+# ---- precheck e infra: os 21 servidores ---------------------------------------------------------
+- name: "Precheck (precheck, instalar) e infra (instalar): todos os servidores"
+  hosts: elastic
+  gather_facts: "{{ acao in ['precheck', 'instalar'] }}"     # so conecta nos servidores quando o play vai rodar
+  vars_files: [vault.yml]
+  any_errors_fatal: true        # se UM servidor reprovar, nada e formatado nos outros
+  roles:
+    - role: precheck
+      when: acao in ['precheck', 'instalar']
+    - role: infra
+      when: acao == 'instalar'
+
+# ---- Elasticsearch ------------------------------------------------------------------------------
+- name: "Instalar Elasticsearch - decidir se o cluster e novo"
+  hosts: es_master
+  gather_facts: "{{ acao == 'instalar' }}"
+  vars_files: [vault.yml]
+  any_errors_fatal: true
+  roles:
+    - role: instalacao
+      fase: es_decidir
+      when: acao == 'instalar' and 'elasticsearch' in componentes
+
+- name: "Instalar Elasticsearch - instalar e iniciar os nos, UM por vez (masters primeiro)"
+  hosts: es_master:es_hot:es_cold:es_frozen:es_ml
+  gather_facts: "{{ acao == 'instalar' }}"
+  vars_files: [vault.yml]
+  serial: 1
+  any_errors_fatal: true
+  roles:
+    - role: instalacao
+      fase: es_nos
+      when: acao == 'instalar' and 'elasticsearch' in componentes
+
+- name: "Instalar Elasticsearch - marca do cluster e senhas definitivas"
+  hosts: elasticsearch
+  gather_facts: "{{ acao == 'instalar' }}"
+  vars_files: [vault.yml]
+  any_errors_fatal: true
+  roles:
+    - role: instalacao
+      fase: es_final
+      when: acao == 'instalar' and 'elasticsearch' in componentes
+
+# ---- Kibana: 3 servidores, um por vez -----------------------------------------------------------
+- name: "Instalar Kibana"
+  hosts: kibana
+  gather_facts: "{{ acao == 'instalar' }}"
+  vars_files: [vault.yml]
+  serial: 1
+  any_errors_fatal: true
+  roles:
+    - role: instalacao
+      fase: kibana
+      when: acao == 'instalar' and 'kibana' in componentes
+
+# ---- Fleet --------------------------------------------------------------------------------------
+- name: "Instalar Fleet - configurar o Kibana (uma vez)"
+  hosts: kibana
+  gather_facts: "{{ acao == 'instalar' }}"
+  vars_files: [vault.yml]
+  roles:
+    - role: instalacao
+      fase: fleet_kibana
+      when: acao == 'instalar' and 'fleet' in componentes
+
+- name: "Instalar Fleet - Fleet Server nos servidores integration"
+  hosts: integration
+  gather_facts: "{{ acao == 'instalar' }}"
+  vars_files: [vault.yml]
+  any_errors_fatal: true
+  roles:
+    - role: instalacao
+      fase: fleet_servers
+      when: acao == 'instalar' and 'fleet' in componentes
+
+# ---- validacao (somente leitura) ----------------------------------------------------------------
+- name: "Validar o ambiente instalado"
+  hosts: elastic
+  gather_facts: "{{ acao == 'validar' }}"
+  vars_files: [vault.yml]
+  roles:
+    - role: validacao
+      when: acao == 'validar'
+
+# ---- fim: apagar a copia temporaria da chave ----------------------------------------------------
+- name: "Acesso: apagar a cópia da chave"
+  hosts: elastic
+  gather_facts: false
+  roles:
+    - role: acesso
+      fase: limpar
+      when: chave_bastion_vms | length > 0

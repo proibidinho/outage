@@ -1,0 +1,19 @@
+---
+# Reinicia o servico SOMENTE quando alguma tarefa avisou (notify) que algo mudou:
+# configuracao, senhas do keystore ou certificados. Quem avisa usa:  notify: reiniciar servico
+# O mesmo aviso serve para Elasticsearch e Kibana; o "when" escolhe o servico certo pelo grupo do servidor.
+- name: reiniciar elasticsearch
+  ansible.builtin.systemd_service:
+    name: elasticsearch
+    state: restarted
+    enabled: true
+  when: inventory_hostname in groups['elasticsearch']
+  listen: reiniciar servico
+
+- name: reiniciar kibana
+  ansible.builtin.systemd_service:
+    name: kibana
+    state: restarted
+    enabled: true
+  when: inventory_hostname in groups['kibana']
+  listen: reiniciar servico
