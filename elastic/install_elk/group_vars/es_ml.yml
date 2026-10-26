@@ -1,6 +1,0 @@
----
-# 2 nos de machine learning
-es_node_roles: [ml]
-es_heap_size: 4g                     # 16 GB de RAM; ML usa memoria fora do heap
-storage_volumes:
-  - {name: esdata, vg: vg_esdata, lv: lv_esdata, mount: /var/lib/elasticsearch, size_gb: 50, count: 1}

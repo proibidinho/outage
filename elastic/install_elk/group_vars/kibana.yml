@@ -1,4 +1,0 @@
----
-# 3 Kibana (nao executam Elasticsearch; falam com os 8 hot)
-storage_volumes:
-  - {name: kbdata, vg: vg_kbdata, lv: lv_kbdata, mount: /var/lib/kibana, size_gb: 100, count: 1}

@@ -1,6 +1,0 @@
----
-# 1 no frozen (no unico = sem redundancia)
-es_node_roles: [data_frozen]
-es_heap_size: 12g                    # 31 GB de RAM: o resto fica para o cache de disco
-storage_volumes:
-  - {name: esdata, vg: vg_esdata, lv: lv_esdata, mount: /var/lib/elasticsearch, size_gb: 1024, count: 3}

@@ -1,6 +1,0 @@
----
-# 2 nos cold
-es_node_roles: [data_cold]
-es_heap_size: 30g
-storage_volumes:
-  - {name: esdata, vg: vg_esdata, lv: lv_esdata, mount: /var/lib/elasticsearch, size_gb: 2048, count: 5}

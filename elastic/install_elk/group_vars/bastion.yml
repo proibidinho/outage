@@ -1,7 +1,0 @@
----
-# =============================================================================
-#  Como ENTRAR no bastion.
-#   acao=usuario (bootstrap): como root, com a credencial do Job Template.
-#   demais acoes            : como aiops (o exec node usa a mesma chave de antes, autorizada para o aiops).
-# =============================================================================
-ansible_user: "{{ bastion_user if acao == 'usuario' else aiops_user }}"
