@@ -1,0 +1,42 @@
+---
+- name: Tentar o endereço {{ diagnostico_endereco }}
+  when: not (diagnostico_resultado.parar | bool)
+  block:
+    - name: Rodar df a partir do jumper no servidor {{ diagnostico_endereco }}
+      ansible.builtin.raw: "ssh {{ diagnostico_opcoes_ssh }} {{ diagnostico_usuario_alvo }}@{{ diagnostico_endereco }} '{{ diagnostico_comando_remoto }}' 2>&1; echo {{ diagnostico_marcador_rc }}$?"
+      register: diagnostico_execucao
+      changed_when: false
+      failed_when: false
+      ignore_unreachable: true
+      timeout: "{{ diagnostico_timeout_tarefa | int }}"
+
+    - name: Separar a saída e o código de retorno da tentativa em {{ diagnostico_endereco }}
+      ansible.builtin.set_fact:
+        diagnostico_jumper_respondeu: "{{ not (diagnostico_execucao.unreachable | default(false) | bool) }}"
+        diagnostico_linhas: "{{ diagnostico_execucao.stdout_lines | default([]) | reject('match', '^' ~ diagnostico_marcador_rc) | list }}"
+        diagnostico_rc: "{{ (((diagnostico_execucao.stdout_lines | default([]) | select('match', '^' ~ diagnostico_marcador_rc) | list | last | default('')) | regex_replace('^' ~ diagnostico_marcador_rc, '') | trim) or '-1') | int }}"
+
+    - name: Registrar a tentativa em {{ diagnostico_endereco }}
+      ansible.builtin.set_fact:
+        diagnostico_resultado: "{{ diagnostico_resultado | combine({'jumper_ok': diagnostico_jumper_respondeu | bool, 'acesso_ok': diagnostico_acessou | bool, 'parar': (diagnostico_acessou | bool) or not (diagnostico_jumper_respondeu | bool), 'endereco': diagnostico_endereco if (diagnostico_acessou | bool) else '', 'rc': diagnostico_rc | int, 'saida': diagnostico_linhas if (diagnostico_acessou | bool) else [], 'tentativas': diagnostico_resultado.tentativas + [{'endereco': diagnostico_endereco, 'resultado': diagnostico_endereco ~ ': ' ~ (diagnostico_texto | trim)}]}) }}"
+      vars:
+        diagnostico_acessou: "{{ (diagnostico_jumper_respondeu | bool) and (diagnostico_rc | int) not in diagnostico_rc_sem_acesso }}"
+        diagnostico_texto: >-
+          {%- if not (diagnostico_jumper_respondeu | bool) -%}
+          o jumper não respondeu ({{ diagnostico_execucao.msg | default('erro desconhecido', true) | trim }})
+          {%- elif (diagnostico_rc | int) == 0 -%}
+          acesso OK, df concluído
+          {%- elif (diagnostico_rc | int) in diagnostico_rc_tempo_esgotado -%}
+          acesso OK, mas o df passou de {{ diagnostico_timeout_df }} segundos e foi interrompido (possível montagem travada)
+          {%- elif (diagnostico_rc | int) == 255 -%}
+          falha no ssh ({{ diagnostico_linhas | join(' ') | trim | default('sem mensagem', true) }})
+          {%- elif (diagnostico_rc | int) == -1 -%}
+          sem código de retorno ({{ diagnostico_linhas | join(' ') | trim | default('sem saída', true) }})
+          {%- else -%}
+          acesso OK, o df terminou com código {{ diagnostico_rc }}
+          {%- endif -%}
+
+  rescue:
+    - name: Registrar a tentativa interrompida em {{ diagnostico_endereco }}
+      ansible.builtin.set_fact:
+        diagnostico_resultado: "{{ diagnostico_resultado | combine({'parar': true, 'tentativas': diagnostico_resultado.tentativas + [{'endereco': diagnostico_endereco, 'resultado': diagnostico_endereco ~ ': tentativa interrompida depois de ' ~ diagnostico_timeout_tarefa ~ ' segundos (' ~ (ansible_failed_result.msg | default('erro desconhecido', true)) ~ ')'}]}) }}"

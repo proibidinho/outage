@@ -1,0 +1,20 @@
+---
+notificacao_smtp_host: vip_smtp.claro.com.br
+notificacao_smtp_porta: 25
+notificacao_remetente: aiops.centroexcelencia@claro.com.br
+notificacao_enviar_aos_times: true
+notificacao_destinatarios_por_tipo:
+  linux:
+    - supunix@claro.com.br
+  windows:
+    - SupServWin@claro.com.br
+  hypervisor:
+    - vmware.infrati@claro.com.br
+notificacao_destinatarios_copia:
+  - leonardo.costa.terceiros@claro.com.br
+  - hassan.silva.terceiros@claro.com.br
+notificacao_destinatarios_validacao:
+  - leonardo.costa.terceiros@claro.com.br
+notificacao_destinatarios_teste: []
+notificacao_tentativas: 3
+notificacao_intervalo: 30

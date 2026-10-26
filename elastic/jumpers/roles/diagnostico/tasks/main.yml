@@ -1,0 +1,49 @@
+---
+- name: Preparar o resultado do diagnóstico
+  ansible.builtin.set_fact:
+    diagnostico_resultado:
+      jumper_ok: true
+      acesso_ok: false
+      parar: false
+      endereco: ""
+      rc: -1
+      saida: []
+      tentativas: []
+      disco: {}
+      disco_mensagem: ""
+
+- name: Identificar o disco do alerta
+  ansible.builtin.set_fact:
+    diagnostico_caminho: "{{ hostvars['localhost'].alvo_alerta.diskPath | default('', true) | string | trim | lower }}"
+
+- name: Conferir se o caminho do disco pode ir no comando
+  ansible.builtin.set_fact:
+    diagnostico_caminho_valido: "{{ diagnostico_caminho is match(diagnostico_regex_caminho) }}"
+
+- name: Tentar ler o uso de disco do servidor, um endereço por vez
+  ansible.builtin.include_tasks: tentativa.yml
+  loop: "{{ alvo_tentativas }}"
+  loop_control:
+    loop_var: diagnostico_endereco
+    label: "{{ diagnostico_endereco }}"
+
+- name: Separar a linha do disco do alerta
+  ansible.builtin.set_fact:
+    diagnostico_resultado: "{{ diagnostico_resultado | combine({'disco': diagnostico_disco, 'disco_mensagem': diagnostico_mensagem}) }}"
+  vars:
+    diagnostico_regex_linha: "{{ diagnostico_regex_df ~ (diagnostico_caminho | regex_escape) ~ diagnostico_regex_fim }}"
+    diagnostico_regex_qualquer: "{{ diagnostico_regex_df ~ diagnostico_regex_montagem ~ diagnostico_regex_fim }}"
+    diagnostico_linhas_df: "{{ diagnostico_resultado.saida | select('match', diagnostico_regex_qualquer) | list }}"
+    diagnostico_linha_exata: "{{ (diagnostico_resultado.saida | select('match', diagnostico_regex_linha, ignorecase=True) | list | first | default('')) if (diagnostico_caminho | length) > 0 else '' }}"
+    diagnostico_linha: "{{ diagnostico_linha_exata if (diagnostico_linha_exata | length) > 0 else ((diagnostico_linhas_df | first) if ((diagnostico_caminho | length) > 0 and (diagnostico_linhas_df | length) == 1) else '') }}"
+    diagnostico_campos: "{{ (diagnostico_linha | regex_findall(diagnostico_regex_qualquer) | first | default([]) | list) if (diagnostico_linha | length) > 0 else [] }}"
+    diagnostico_disco: "{{ dict(['sistema_arquivos', 'tamanho', 'usado', 'livre', 'uso', 'montado_em'] | zip(diagnostico_campos)) if (diagnostico_campos | length) == 6 else {} }}"
+    diagnostico_mensagem: >-
+      {{ '' if (diagnostico_disco | length) > 0 else
+         ('O alerta não informou qual disco está alarmando.' if (diagnostico_caminho | length) == 0 else
+          ('O df passou de ' ~ diagnostico_timeout_df ~ ' segundos e foi interrompido (possível montagem travada).' if (diagnostico_resultado.rc | int) in diagnostico_rc_tempo_esgotado else 'Disco não encontrado no servidor.')) }}
+  when: diagnostico_resultado.acesso_ok | bool
+
+- name: Resultado do diagnóstico
+  ansible.builtin.debug:
+    msg: "{{ ['Acesso ao servidor: ' ~ ('OK pelo endereço ' ~ diagnostico_resultado.endereco if (diagnostico_resultado.acesso_ok | bool) else 'não foi possível')] + (diagnostico_resultado.tentativas | map(attribute='resultado') | list) + ((['Disco do alerta: ' ~ (diagnostico_caminho if (diagnostico_caminho | length) > 0 else 'não informado')] + ([diagnostico_resultado.disco.montado_em ~ ': tamanho ' ~ diagnostico_resultado.disco.tamanho ~ ', usado ' ~ diagnostico_resultado.disco.usado ~ ', livre ' ~ diagnostico_resultado.disco.livre ~ ', uso ' ~ diagnostico_resultado.disco.uso] if (diagnostico_resultado.disco | length) > 0 else [diagnostico_resultado.disco_mensagem])) if (diagnostico_resultado.acesso_ok | bool) else []) }}"

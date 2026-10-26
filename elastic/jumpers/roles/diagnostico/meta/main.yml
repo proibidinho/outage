@@ -1,0 +1,7 @@
+---
+galaxy_info:
+  author: Equipe CLBR-TI-OPS-IT-SERVICE-AUTOMATION
+  description: A partir do jumper do datacenter, entra no servidor do alerta por ssh e roda só df no disco do alerta (df -hP), tentando primeiro o nome e depois o IP. Nunca falha o job e nada é criado, alterado ou apagado no jumper nem no servidor.
+  license: proprietary
+  min_ansible_version: "2.15"
+dependencies: []

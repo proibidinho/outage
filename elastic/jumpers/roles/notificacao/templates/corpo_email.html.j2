@@ -1,0 +1,82 @@
+{% set cor_faixa = notificacao_cores.faixa_ok if notificacao_situacao == 'ok' else notificacao_cores.faixa_alerta %}
+{% set fonte = "font-family:Arial,'Segoe UI',Helvetica,sans-serif;" %}
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="pt-BR">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Self-healing</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f2f4f7;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f2f4f7" style="background-color:#f2f4f7;">
+<tr>
+<td align="center" style="padding:20px 10px;">
+<table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="width:640px;background-color:#ffffff;border:1px solid #d5dae1;{{ fonte }}">
+<tr>
+<td bgcolor="{{ cor_faixa }}" style="background-color:{{ cor_faixa }};padding:14px 24px;{{ fonte }}font-size:15px;font-weight:bold;color:#ffffff;letter-spacing:1px;">SELF-HEALING &#8226; {{ (alvo_titulo if (alvo_titulo | length) > 0 else 'SLOW DISK') | e }}</td>
+</tr>
+<tr>
+<td style="padding:22px 24px 6px 24px;{{ fonte }}font-size:15px;line-height:22px;color:#1f2933;">
+<b>{{ notificacao_frase.titulo | e }}</b><br />
+{% if notificacao_situacao == 'sem_acesso' %}
+{{ alvo_motivo_sem_acesso | e }}
+{% else %}
+{{ notificacao_frase.texto }}
+{% endif %}
+</td>
+</tr>
+<tr>
+<td style="padding:18px 24px 6px 24px;{{ fonte }}font-size:12px;font-weight:bold;color:#5f6b7a;letter-spacing:1px;">DADOS DO ALERTA</td>
+</tr>
+<tr>
+<td style="padding:0 24px 6px 24px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;{{ fonte }}font-size:14px;">
+{% for item in notificacao_dados %}
+<tr>
+<td width="190" valign="top" style="width:190px;padding:7px 10px;border-bottom:1px solid #e4e7eb;color:#5f6b7a;{{ fonte }}font-size:14px;">{{ item.rotulo | e }}</td>
+<td valign="top" style="padding:7px 10px;border-bottom:1px solid #e4e7eb;color:#1f2933;{{ fonte }}font-size:14px;">{{ item.valor | e }}</td>
+</tr>
+{% endfor %}
+</table>
+</td>
+</tr>
+{% if notificacao_situacao == 'ok' %}
+<tr>
+<td style="padding:18px 24px 6px 24px;{{ fonte }}font-size:12px;font-weight:bold;color:#5f6b7a;letter-spacing:1px;">SITUAÇÃO DO DISCO</td>
+</tr>
+<tr>
+<td style="padding:0 24px 8px 24px;">
+{% if notificacao_disco | length > 0 %}
+{% set uso = notificacao_disco.uso | regex_replace('%', '') | int %}
+{% set cor_uso = notificacao_cores.uso_critico if uso >= (notificacao_uso_critico | int) else (notificacao_cores.uso_atencao if uso >= (notificacao_uso_atencao | int) else notificacao_cores.uso_normal) %}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;{{ fonte }}font-size:14px;">
+<tr>
+<td bgcolor="#eef1f5" style="background-color:#eef1f5;padding:8px 10px;border-bottom:1px solid #d5dae1;color:#3e4c59;font-weight:bold;{{ fonte }}font-size:13px;">Disco</td>
+<td bgcolor="#eef1f5" align="right" style="background-color:#eef1f5;padding:8px 10px;border-bottom:1px solid #d5dae1;color:#3e4c59;font-weight:bold;{{ fonte }}font-size:13px;">Tamanho</td>
+<td bgcolor="#eef1f5" align="right" style="background-color:#eef1f5;padding:8px 10px;border-bottom:1px solid #d5dae1;color:#3e4c59;font-weight:bold;{{ fonte }}font-size:13px;">Usado</td>
+<td bgcolor="#eef1f5" align="right" style="background-color:#eef1f5;padding:8px 10px;border-bottom:1px solid #d5dae1;color:#3e4c59;font-weight:bold;{{ fonte }}font-size:13px;">Livre</td>
+<td bgcolor="#eef1f5" align="right" style="background-color:#eef1f5;padding:8px 10px;border-bottom:1px solid #d5dae1;color:#3e4c59;font-weight:bold;{{ fonte }}font-size:13px;">Uso</td>
+</tr>
+<tr>
+<td style="padding:9px 10px;border-bottom:1px solid #e4e7eb;color:#1f2933;{{ fonte }}font-size:14px;">{{ notificacao_disco.montado_em | e }}</td>
+<td align="right" style="padding:9px 10px;border-bottom:1px solid #e4e7eb;color:#1f2933;{{ fonte }}font-size:14px;">{{ notificacao_disco.tamanho | e }}</td>
+<td align="right" style="padding:9px 10px;border-bottom:1px solid #e4e7eb;color:#1f2933;{{ fonte }}font-size:14px;">{{ notificacao_disco.usado | e }}</td>
+<td align="right" style="padding:9px 10px;border-bottom:1px solid #e4e7eb;color:#1f2933;{{ fonte }}font-size:14px;">{{ notificacao_disco.livre | e }}</td>
+<td align="right" style="padding:9px 10px;border-bottom:1px solid #e4e7eb;color:{{ cor_uso }};font-weight:bold;{{ fonte }}font-size:14px;">{{ notificacao_disco.uso | e }}</td>
+</tr>
+</table>
+{% else %}
+<p style="margin:6px 0;{{ fonte }}font-size:14px;color:#1f2933;">{{ notificacao_diagnostico.disco_mensagem | default('Disco não encontrado no servidor.', true) | e }}</p>
+{% endif %}
+</td>
+</tr>
+{% endif %}
+<tr>
+<td bgcolor="#f7f8fa" style="background-color:#f7f8fa;padding:14px 24px;border-top:1px solid #e4e7eb;{{ fonte }}font-size:11px;line-height:16px;color:#7b8794;">{{ notificacao_rodape }}</td>
+</tr>
+</table>
+</td>
+</tr>
+</table>
+</body>
+</html>

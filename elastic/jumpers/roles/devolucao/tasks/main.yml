@@ -1,0 +1,95 @@
+---
+- name: Montar e enviar a devolução sem nunca falhar o job
+  block:
+    - name: Ler a situação do job e o horário de fim
+      ansible.builtin.set_fact:
+        devolucao_situacao: "{{ notificacao_situacao | default('falha', true) }}"
+        devolucao_diagnostico: "{{ notificacao_diagnostico | default({}, true) }}"
+        devolucao_erro_email: "{{ notificacao_erro | default('', true) | string | trim }}"
+        devolucao_fim_epoch: "{{ now().timestamp() }}"
+
+    - name: Montar o resultado e os motivos
+      ansible.builtin.set_fact:
+        devolucao_status: "{{ devolucao_status_por_situacao[devolucao_situacao] | default(devolucao_status_padrao, true) }}"
+        devolucao_uso: "{{ (devolucao_diagnostico.disco | default({}, true)).uso | default('N/A', true) if devolucao_situacao == 'ok' else 'N/A' }}"
+        devolucao_motivos: "{{ (devolucao_lista | map('trim') | reject('equalto', '') | map('truncate', devolucao_tamanho_motivo | int, true) | list) }}"
+      vars:
+        devolucao_lista: >-
+          {{ [alvo_motivo_sem_acesso | default('', true) | string]
+             + ((devolucao_diagnostico.tentativas | default([], true) | map(attribute='resultado') | list) if devolucao_situacao == 'falha' else [])
+             + [(devolucao_diagnostico.disco_mensagem | default('', true) | string) if devolucao_situacao == 'ok' else '']
+             + [('E-mail não enviado: ' ~ devolucao_erro_email) if (devolucao_erro_email | length) > 0 else ''] }}
+
+    - name: Montar o evento da devolução
+      ansible.builtin.set_fact:
+        devolucao_evento:
+          job_id: "{{ tower_job_id | default(awx_job_id | default('N/A', true), true) }}"
+          job_name: "{{ tower_job_template_name | default(awx_job_template_name | default('N/A', true), true) }}"
+          job_playbook: "{{ devolucao_playbook }}"
+          job_status: "{{ 'failed' if (devolucao_erro_email | length) > 0 else 'successful' }}"
+          job_started: "{{ '%Y-%m-%dT%H:%M:%SZ' | ansible.builtin.strftime(alvo_inicio_epoch | default(devolucao_fim_epoch, true) | float, utc=true) }}"
+          job_finished: "{{ '%Y-%m-%dT%H:%M:%SZ' | ansible.builtin.strftime(devolucao_fim_epoch | float, utc=true) }}"
+          job_duration: "{{ ((devolucao_fim_epoch | float) - (alvo_inicio_epoch | default(devolucao_fim_epoch, true) | float)) | round(3) }}"
+          job_errors: "{{ devolucao_motivos }}"
+          hostname: "{{ notificacao_hostname | default('', true) | string | trim | default('NAO_MAPEADO', true) }}"
+          datacenter: "{{ 'NAO_MAPEADO' if (alvo_localidade | default('', true)) in ['', 'NAO-MAPEADO'] else alvo_localidade }}"
+          alert_title: "{{ alvo_titulo | default('', true) | default('N/A', true) }}"
+          episode_id: "{{ alvo_alerta.episodeId | default('N/A', true) | string }}"
+          tipo: disco
+          servico: "Disco {{ alvo_alerta.diskPath | default('N/A', true) | string | trim }}"
+          metrica_antes: "{{ devolucao_uso }}"
+          metrica_depois: "{{ devolucao_uso }}"
+          metrica_esperada: N/A
+          metrica_atingida: false
+          selfhealing_status: "{{ devolucao_status }}"
+          selfhealing_sucesso: "{{ devolucao_status == 'success' }}"
+          mensagem: "{{ devolucao_mensagens[devolucao_status] }}"
+
+    - name: Evento da devolução ao Splunk
+      ansible.builtin.debug:
+        var: devolucao_evento
+
+    - name: Conferir se a devolução está ligada
+      ansible.builtin.set_fact:
+        devolucao_ligada: "{{ (devolucao_ativa | bool) and (splunk_hec_url | default('', true) | string | trim | length) > 0 and (splunk_hec_token | default('', true) | string | trim) not in ['', devolucao_token_ficticio] }}"
+      no_log: true
+
+    - name: Devolução ao Splunk desligada
+      ansible.builtin.debug:
+        msg: "{{ 'Devolução ao Splunk não enviada: desligada pela variável devolucao_ativa (false).' if not (devolucao_ativa | bool) else 'Devolução ao Splunk não enviada: a credencial self-healing-splunk-hec não está no job ou ainda está com o token fictício.' }}"
+      when: not (devolucao_ligada | bool)
+
+    - name: Enviar e conferir a devolução ao Splunk
+      when: devolucao_ligada | bool
+      block:
+        - name: Enviar o resultado ao Splunk
+          ansible.builtin.uri:
+            url: "{{ splunk_hec_url }}"
+            method: POST
+            headers:
+              Authorization: "Splunk {{ splunk_hec_token }}"
+            body_format: json
+            body: "{{ devolucao_evento }}"
+            validate_certs: false
+            use_proxy: false
+            timeout: "{{ devolucao_timeout | int }}"
+            status_code: "{{ devolucao_codigos_ok }}"
+          environment:
+            http_proxy: ""
+            https_proxy: ""
+            no_proxy: "{{ splunk_hec_url | ansible.builtin.urlsplit('hostname') }}"
+          register: devolucao_envio
+          until: (devolucao_envio.status | default(-1) | int) in devolucao_codigos_ok
+          retries: "{{ devolucao_tentativas | int }}"
+          delay: "{{ devolucao_intervalo | int }}"
+          no_log: true
+          failed_when: false
+
+        - name: Resultado da devolução ao Splunk
+          ansible.builtin.debug:
+            msg: "Devolução ao Splunk: HTTP {{ devolucao_envio.status | default(-1) }}{{ '' if (devolucao_envio.status | default(-1) | int) in devolucao_codigos_ok else ' (não recebida; o job segue sem falhar)' }}"
+
+  rescue:
+    - name: Devolução ao Splunk não feita
+      ansible.builtin.debug:
+        msg: "Devolução ao Splunk não feita: erro na task \"{{ ansible_failed_task.name | default('desconhecida', true) }}\". O job segue sem falhar."

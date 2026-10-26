@@ -1,0 +1,20 @@
+---
+diagnostico_marcador_rc: SELF_HEALING_RC=
+diagnostico_rc_sem_acesso:
+  - 255
+  - -1
+diagnostico_rc_tempo_esgotado:
+  - 124
+  - 137
+diagnostico_regex_caminho: '^/[a-z0-9._/@+-]*$'
+diagnostico_regex_df: '^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+([0-9]+%)\s+'
+diagnostico_regex_montagem: '(/\S*)'
+diagnostico_regex_fim: '\s*$'
+diagnostico_comando_df_caminho: >-
+  m=""; [ -r /proc/mounts ] && m=$(cut -d" " -f2 /proc/mounts | grep -i -x -F -- "{{ diagnostico_caminho }}" | tail -1);
+  [ -z "$m" ] && m="{{ diagnostico_caminho }}"; $t df -hP "$m" 2>/dev/null; r=$?
+diagnostico_comando_remoto: >-
+  t=""; command -v timeout >/dev/null 2>&1 && t="timeout -k 5 {{ diagnostico_timeout_df | int }}";
+  {{ diagnostico_comando_df_caminho if (diagnostico_caminho_valido | bool) else 'r=1' }};
+  case $r in 0|124|137) ;; *) if [ -n "$t" ]; then $t df -hP; else df -hP 2>/dev/null || bdf; fi; r=$? ;; esac; exit $r
+diagnostico_opcoes_ssh: "-n -o BatchMode=yes -o ConnectTimeout={{ diagnostico_timeout_conexao | int }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
