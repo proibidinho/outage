@@ -1,0 +1,7 @@
+---
+# 3 masters dedicados (quorum tolera 1 falha)
+es_node_roles: [master]
+es_heap_size: 3g                     # 7,5 GB de RAM
+storage_volumes:
+  - {name: esdata, vg: vg_esdata, lv: lv_esdata, mount: /var/lib/elasticsearch, size_gb: 50, count: 1}
+  - {name: eslogs, vg: vg_eslogs, lv: lv_eslogs, mount: /var/log/elasticsearch, size_gb: 50, count: 1}

@@ -1,0 +1,59 @@
+---
+# =============================================================================
+#  infra / volume  —  cria UM volume (chamado em loop pelo discos.yml)
+#  item = {name, vg, lv, mount, size_gb, count}
+#
+#  Cada modulo e idempotente e equivale ao comando manual:
+#    lvg         ->  pvcreate <discos> + vgcreate/vgextend <vg>
+#    lvol        ->  lvcreate -n <lv> -l 100%FREE <vg>
+#    filesystem  ->  mkfs.xfs /dev/<vg>/<lv>      (nunca sobrescreve outro filesystem)
+#    mount       ->  linha no /etc/fstab + mount
+# =============================================================================
+- name: "{{ item.mount }}: escolher os discos (tamanho certo, os primeiros da lista)"
+  ansible.builtin.set_fact:
+    discos_do_volume: >-
+      {{ (discos_livres
+          | selectattr('gb', 'ge', item.size_gb * 0.97)
+          | selectattr('gb', 'le', item.size_gb * 1.03)
+          | map(attribute='path') | list)[:item.count | int] }}
+
+- name: "{{ item.mount }}: criar o VG {{ item.vg }} com esses discos (pvcreate + vgcreate)"
+  community.general.lvg:
+    vg: "{{ item.vg }}"
+    pvs: "{{ discos_do_volume }}"
+    state: present
+
+- name: "{{ item.mount }}: criar o LV {{ item.lv }} ocupando 100% do VG (lvcreate)"
+  community.general.lvol:
+    vg: "{{ item.vg }}"
+    lv: "{{ item.lv }}"
+    size: 100%FREE
+    shrink: false
+
+- name: "{{ item.mount }}: criar o filesystem XFS (mkfs.xfs)"
+  community.general.filesystem:
+    fstype: xfs
+    dev: "/dev/{{ item.vg }}/{{ item.lv }}"
+
+- name: "{{ item.mount }}: criar o ponto de montagem"
+  ansible.builtin.file:
+    path: "{{ item.mount }}"
+    state: directory
+
+- name: "{{ item.mount }}: gravar no /etc/fstab e montar"
+  # sem "nofail" de proposito: se o disco sumir, o servidor nao sobe gravando dados no disco do SO
+  ansible.posix.mount:
+    path: "{{ item.mount }}"
+    src: "/dev/mapper/{{ item.vg }}-{{ item.lv }}"
+    fstype: xfs
+    opts: defaults,noatime
+    state: mounted
+
+- name: "{{ item.mount }}: corrigir o contexto SELinux"
+  ansible.builtin.command: "restorecon -R {{ item.mount }}"
+  changed_when: false
+  when: ansible_facts.selinux.status | default('disabled') == 'enabled'
+
+- name: "{{ item.mount }}: tirar esses discos da lista de livres"
+  ansible.builtin.set_fact:
+    discos_livres: "{{ discos_livres | rejectattr('path', 'in', discos_do_volume) | list }}"

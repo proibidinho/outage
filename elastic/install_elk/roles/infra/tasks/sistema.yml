@@ -1,0 +1,133 @@
+---
+# =============================================================================
+#  infra / sistema  —  configuracao do sistema operacional dos servidores
+#
+#  Todos (ES, Kibana, Integration):  pacotes base + chrony ligado.
+#  Somente nos nos Elasticsearch:    parametros de kernel, swap desligado, THP,
+#                                    limites de memoria do servico (memlock etc.).
+#  Tudo e idempotente e persistente (sobrevive a reboot). Nao mexe em discos
+#  de dados (isso e o discos.yml) nem em firewalld/SELinux (decisao do ambiente).
+# =============================================================================
+- name: Instalar pacotes base
+  ansible.builtin.dnf:
+    name: [chrony, openssl, unzip, python3-dnf-plugin-versionlock]
+    state: present
+
+- name: Garantir chronyd habilitado e ativo (cluster exige relogios sincronizados)
+  ansible.builtin.systemd_service:
+    name: chronyd
+    state: started
+    enabled: true
+
+# ----------------------------- somente nos Elasticsearch ---------------------
+- name: Ajustes do sistema exigidos pelo Elasticsearch
+  when: inventory_hostname in groups['elasticsearch']
+  block:
+    - name: Parâmetros de kernel (max_map_count, swappiness, tcp_retries2)
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/90-elasticsearch.conf
+        content: |
+          vm.max_map_count = 1048576
+          vm.swappiness = 1
+          net.ipv4.tcp_retries2 = 5
+        owner: root
+        group: root
+        mode: "0644"
+      register: sysctl_arquivo
+
+    - name: Aplicar os parâmetros de kernel agora
+      ansible.builtin.command: sysctl -p /etc/sysctl.d/90-elasticsearch.conf
+      when: sysctl_arquivo is changed
+      changed_when: true
+
+    - name: Desligar o swap agora
+      ansible.builtin.command: swapoff -a
+      when: ansible_facts.swaptotal_mb | int > 0
+      changed_when: true
+
+    - name: Comentar as linhas de swap do /etc/fstab (gera backup)
+      ansible.builtin.replace:
+        path: /etc/fstab
+        regexp: '^([^#\s]\S*\s+\S+\s+swap\s+.*)$'
+        replace: '# desativado-por-ansible: \1'
+        backup: true
+
+    - name: Unidade systemd que fixa Transparent Huge Pages em "madvise" a cada boot
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/elastic-thp.service
+        content: |
+          [Unit]
+          Description=Transparent Huge Pages = madvise (requisito do Elasticsearch)
+          DefaultDependencies=no
+          After=sysinit.target local-fs.target
+          Before=elasticsearch.service
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/bin/sh -c 'echo madvise > /sys/kernel/mm/transparent_hugepage/enabled'
+          ExecStart=/bin/sh -c 'echo madvise > /sys/kernel/mm/transparent_hugepage/defrag'
+
+          [Install]
+          WantedBy=basic.target
+        owner: root
+        group: root
+        mode: "0644"
+      register: thp_unidade
+
+    - name: Pasta de ajustes do serviço elasticsearch
+      ansible.builtin.file:
+        path: /etc/systemd/system/elasticsearch.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Limites do serviço (memlock ilimitado é exigido por bootstrap.memory_lock)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/elasticsearch.service.d/override.conf
+        content: |
+          [Service]
+          LimitMEMLOCK=infinity
+          LimitNOFILE=65535
+          LimitNPROC=4096
+        owner: root
+        group: root
+        mode: "0644"
+      register: limites
+
+    - name: Recarregar o systemd se alguma unidade mudou
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: thp_unidade is changed or limites is changed
+
+    - name: Ligar a unidade de THP
+      ansible.builtin.systemd_service:
+        name: elastic-thp.service
+        enabled: true
+        state: started
+
+    - name: Ler o estado EFETIVO do sistema (não só os arquivos)
+      ansible.builtin.shell: |
+        echo "max_map_count=$(sysctl -n vm.max_map_count)"
+        echo "swappiness=$(sysctl -n vm.swappiness)"
+        echo "swap_kb=$(awk '/SwapTotal/{print $2}' /proc/meminfo)"
+        echo "thp=$(sed -n 's/.*\[\(.*\)\].*/\1/p' /sys/kernel/mm/transparent_hugepage/enabled)"
+      args:
+        executable: /bin/bash
+      register: efetivo
+      changed_when: false
+      check_mode: false
+
+    - name: Conferir o estado efetivo
+      vars:
+        e: "{{ dict(efetivo.stdout_lines | map('split', '=', 1)) }}"
+      ansible.builtin.assert:
+        that:
+          - e.max_map_count | int >= 1048576
+          - e.swappiness | int == 1
+          - e.swap_kb | int == 0
+          - e.thp == 'madvise'
+        fail_msg: "Estado do SO divergente em {{ inventory_hostname }}: {{ e }}"
+        quiet: true
+      when: not ansible_check_mode

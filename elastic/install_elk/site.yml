@@ -1,0 +1,175 @@
+---
+# =============================================================================
+#  site.yml  —  UM unico playbook. O que ele faz depende da variavel  acao  (group_vars/all.yml):
+#
+#    -e acao=usuario    cria o usuario aiops (uma vez)
+#    -e acao=precheck   confere o ambiente, somente leitura            <- padrao
+#    -e acao=ensaio     mostra quais discos seriam formatados, somente leitura
+#    -e acao=instalar   pre-check + discos + sistema + elasticsearch + kibana + fleet
+#    -e acao=validar    confere o ambiente instalado, somente leitura
+#
+#  Na acao "instalar", a variavel  componentes  (group_vars/all.yml) escolhe o que instalar:
+#    -e '{"componentes": ["kibana"]}'      so o Kibana (exemplo)
+#  Cluster Elasticsearch NOVO:  -e acao=instalar -e es_bootstrap_allowed=true
+#
+#  acao=usuario:  o bastion cria o aiops nele mesmo (gera a chave) e, como root, em cada servidor (delegate_to).
+#                 As demais acoes entram nos servidores como aiops, com a chave do aiops do bastion.
+#  Cada role roda nos grupos do "hosts:" do play e so quando a condicao "when" e verdadeira.
+# =============================================================================
+
+- name: "Conferir os valores de acao e componentes"
+  hosts: elastic
+  connection: local
+  run_once: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.assert:
+        that:
+          - acao in ['usuario', 'precheck', 'ensaio', 'instalar', 'validar']
+          - componentes | difference(['elasticsearch', 'kibana', 'fleet']) | length == 0
+        fail_msg: "acao deve ser usuario | precheck | ensaio | instalar | validar; componentes so aceita elasticsearch, kibana, fleet."
+        quiet: true
+
+# ---- acao=usuario: aiops no bastion (com chave) e nos servidores ---------------------------------
+- name: "acao=usuario - parte 1: criar o aiops no bastion e gerar a chave dele"
+  hosts: bastion
+  gather_facts: false
+  tasks:
+    - ansible.builtin.include_role: {name: infra, tasks_from: usuario}
+      when: acao == 'usuario'
+
+- name: "acao=usuario - parte 2: o bastion cria o aiops em cada servidor e distribui a chave"
+  hosts: elastic
+  gather_facts: false
+  tasks:
+    - ansible.builtin.include_role: {name: infra, tasks_from: usuario}
+      when: acao == 'usuario'
+
+# ---- demais acoes: pegar a chave do aiops no bastion para entrar nos servidores -------------------
+- name: "Buscar a chave do aiops no bastion (temporaria, apagada no fim)"
+  hosts: elastic
+  gather_facts: false
+  tasks:
+    - name: Copiar a chave privada do bastion para o job e usá-la na conexão
+      when: acao != 'usuario'
+      block:
+        - name: Buscar a chave no bastion
+          ansible.builtin.fetch:
+            src: "{{ aiops_key_path }}"
+            dest: "{{ aiops_key_local }}"
+            flat: true
+          delegate_to: bastion
+          run_once: true
+          no_log: true
+
+        - name: Restringir a permissão da cópia (o ssh exige 0600)
+          ansible.builtin.file:
+            path: "{{ aiops_key_local }}"
+            mode: "0600"
+          delegate_to: localhost
+          run_once: true
+          become: false
+
+        - name: Usar essa chave para entrar nos servidores
+          ansible.builtin.set_fact:
+            ansible_ssh_private_key_file: "{{ aiops_key_local }}"
+
+# ---- precheck, ensaio de discos e infraestrutura: os 21 servidores -------------------------------
+- name: "acao=precheck | ensaio | instalar: pre-check, discos e sistema (todos os servidores)"
+  hosts: elastic
+  become: true
+  vars_files: [vault.yml]
+  any_errors_fatal: true        # se UM servidor reprovar, nada e formatado nos outros
+  tasks:
+    - ansible.builtin.include_role: {name: precheck}
+      when: acao in ['precheck', 'instalar']
+    - ansible.builtin.include_role: {name: infra, tasks_from: discos}
+      when: acao in ['ensaio', 'instalar']
+    - ansible.builtin.include_role: {name: infra, tasks_from: sistema}
+      when: acao == 'instalar'
+
+# ---- Elasticsearch ------------------------------------------------------------------------------
+- name: "acao=instalar: Elasticsearch - decidir se o cluster e novo"
+  hosts: es_master
+  become: true
+  vars_files: [vault.yml]
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role: {name: instalacao}
+      vars: {fase: es_decidir}
+      when: acao == 'instalar' and 'elasticsearch' in componentes
+
+- name: "acao=instalar: Elasticsearch - instalar e iniciar os nos, UM por vez (masters primeiro)"
+  hosts: es_master:es_hot:es_cold:es_frozen:es_ml
+  become: true
+  vars_files: [vault.yml]
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role: {name: instalacao}
+      vars: {fase: es_nos}
+      when: acao == 'instalar' and 'elasticsearch' in componentes
+
+- name: "acao=instalar: Elasticsearch - marca do cluster e senhas definitivas"
+  hosts: elasticsearch
+  become: true
+  vars_files: [vault.yml]
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role: {name: instalacao}
+      vars: {fase: es_final}
+      when: acao == 'instalar' and 'elasticsearch' in componentes
+
+# ---- Kibana: 3 servidores, um por vez -----------------------------------------------------------
+- name: "acao=instalar: Kibana"
+  hosts: kibana
+  become: true
+  vars_files: [vault.yml]
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role: {name: instalacao}
+      vars: {fase: kibana}
+      when: acao == 'instalar' and 'kibana' in componentes
+
+# ---- Fleet --------------------------------------------------------------------------------------
+- name: "acao=instalar: Fleet - configurar o Kibana (uma vez)"
+  hosts: kibana
+  become: true
+  vars_files: [vault.yml]
+  tasks:
+    - ansible.builtin.include_role: {name: instalacao}
+      vars: {fase: fleet_kibana}
+      when: acao == 'instalar' and 'fleet' in componentes
+
+- name: "acao=instalar: Fleet - instalar o Fleet Server nos servidores integration"
+  hosts: integration
+  become: true
+  vars_files: [vault.yml]
+  any_errors_fatal: true
+  tasks:
+    - ansible.builtin.include_role: {name: instalacao}
+      vars: {fase: fleet_servers}
+      when: acao == 'instalar' and 'fleet' in componentes
+
+# ---- validacao (somente leitura) ----------------------------------------------------------------
+- name: "acao=validar: conferir o ambiente instalado"
+  hosts: elastic
+  become: true
+  vars_files: [vault.yml]
+  tasks:
+    - ansible.builtin.include_role: {name: validacao}
+      when: acao == 'validar'
+
+# ---- fim: apagar a copia temporaria da chave --------------------------------------------------------
+- name: "Apagar a cópia temporária da chave do aiops"
+  hosts: elastic
+  gather_facts: false
+  tasks:
+    - ansible.builtin.file:
+        path: "{{ aiops_key_local }}"
+        state: absent
+      delegate_to: localhost
+      run_once: true
+      become: false
+      when: acao != 'usuario'

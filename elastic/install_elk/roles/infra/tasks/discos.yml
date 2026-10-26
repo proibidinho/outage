@@ -1,0 +1,82 @@
+---
+# =============================================================================
+#  infra / discos  —  cria LVM + XFS nos discos de dados e monta no fstab
+#
+#  Em 3 passos simples:
+#    1) ACHAR    os "discos crus" do servidor
+#    2) CONFERIR se a quantidade bate com o group_vars/  (se nao bater, PARA antes de formatar)
+#    3) CRIAR    cada volume (volume.yml: lvg, lvol, filesystem, mount) — so com acao=instalar
+#
+#  Ensaio sem formatar nada:   ansible-playbook site.yml -e acao=ensaio   (so os passos 1 e 2)
+#
+#  "Disco cru" = disco inteiro SEM particao, SEM volume em cima e SEM nenhuma assinatura
+#  (blkid vazio). Por isso o vg00 e os discos do sistema nunca entram: eles tem assinatura.
+#  O que cada servidor precisa vem de "storage_volumes" em group_vars/ (tamanho e quantidade).
+# =============================================================================
+
+# ------------------------------- 1) ACHAR ----------------------------------
+- name: Achar os discos crus (somente leitura)
+  # Imprime uma linha JSON por disco:  {"path": "/dev/disk/by-path/...", "gb": 1024.0}
+  # O by-path e usado porque o nome (sdb, sdc) pode mudar entre reboots.
+  ansible.builtin.shell: |
+    for d in $(lsblk -dn -o NAME,TYPE | awk '$2=="disk"{print $1}'); do
+      [ "$(lsblk -n -o NAME /dev/$d | wc -l)" -eq 1 ] || continue      # tem particao ou volume em cima: nao e cru
+      blkid -p /dev/$d >/dev/null 2>&1; [ $? -eq 2 ] || continue       # tem assinatura (rc 2 = nada encontrado): nao e cru
+      path=$(for l in /dev/disk/by-path/*; do [ "$(readlink -f $l)" = "/dev/$d" ] && echo $l; done | grep -v -- '-part' | head -1)
+      [ -n "$path" ] || continue
+      gb=$(lsblk -dbn -o SIZE /dev/$d | awk '{printf "%.1f", $1/1073741824}')
+      printf '{"path": "%s", "gb": %s}\n' "$path" "$gb"
+    done | sort
+  args:
+    executable: /bin/bash
+  register: achados
+  changed_when: false
+  check_mode: false
+
+- name: Montar as listas de trabalho
+  ansible.builtin.set_fact:
+    # discos crus ainda sem dono (vai diminuindo a cada volume criado)
+    discos_livres: "{{ achados.stdout_lines | map('from_json') | list }}"
+    # volumes do inventory que ainda NAO estao montados (reexecucao: o que ja existe e ignorado)
+    volumes_pendentes: "{{ storage_volumes | rejectattr('mount', 'in', ansible_facts.mounts | map(attribute='mount') | list) | list }}"
+
+# ------------------------------- 2) CONFERIR -------------------------------
+- name: Mostrar o que sera feito
+  ansible.builtin.debug:
+    msg:
+      discos_crus_encontrados: "{{ discos_livres | map(attribute='gb') | list }}"
+      volumes_a_criar: "{{ volumes_pendentes | map(attribute='mount') | list }}"
+
+- name: Parar se a quantidade de discos crus nao bater com o group_vars
+  # Regra: discos crus encontrados == discos pedidos pelos volumes pendentes (sobrou ou faltou = para).
+  ansible.builtin.assert:
+    that: discos_livres | length == volumes_pendentes | map(attribute='count') | map('int') | sum
+    fail_msg: >-
+      {{ inventory_hostname }}: {{ discos_livres | length }} disco(s) cru(s) encontrado(s) ({{ discos_livres | map(attribute='gb') | list }} GB),
+      mas o group_vars pede {{ volumes_pendentes | map(attribute='count') | map('int') | sum }}. Nada foi formatado.
+    quiet: true
+
+- name: Parar se faltar disco do tamanho certo para algum volume (tolerancia de 3%)
+  vars:
+    do_tamanho: "{{ discos_livres | selectattr('gb', 'ge', item.size_gb * 0.97) | selectattr('gb', 'le', item.size_gb * 1.03) | list }}"
+  ansible.builtin.assert:
+    that: do_tamanho | length >= item.count | int
+    fail_msg: "{{ inventory_hostname }}: {{ item.mount }} pede {{ item.count }} disco(s) de {{ item.size_gb }} GB, so ha {{ do_tamanho | length }}. Nada foi formatado."
+    quiet: true
+  loop: "{{ volumes_pendentes }}"
+  loop_control:
+    label: "{{ item.mount }}"
+
+# ------------------------------- 3) CRIAR ----------------------------------
+- name: Garantir as ferramentas de LVM e XFS
+  ansible.builtin.dnf:
+    name: [lvm2, xfsprogs]
+    state: present
+  when: acao == 'instalar' and volumes_pendentes | length > 0
+
+- name: Criar cada volume (passos em volume.yml)
+  ansible.builtin.include_tasks: volume.yml
+  loop: "{{ volumes_pendentes }}"
+  loop_control:
+    label: "{{ item.mount }}"
+  when: acao == 'instalar'

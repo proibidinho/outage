@@ -1,0 +1,191 @@
+---
+# =============================================================================
+#  ROLE precheck  —  SOMENTE LEITURA: nao altera nada nos servidores.
+#
+#  Roda em todos os 21 servidores. Cada verificacao soma o que encontrou em
+#  "erros" ou "avisos"; so no fim o host e reprovado (assim voce ve todos os
+#  problemas de uma vez, e nao um por execucao).
+#  Obs.: o plano de discos tem seu proprio "ensaio": site.yml -e acao=ensaio
+# =============================================================================
+
+# ----------------------------------------------------------------------------
+# 1) Parametros do projeto (group_vars/ + inventory.yml + vault.yml). Falha cedo, antes de tudo.
+# ----------------------------------------------------------------------------
+- name: Validar versão, nome do cluster e topologia de masters
+  ansible.builtin.assert:
+    that:
+      - elastic_version is match('^[0-9]+[.][0-9]+[.][0-9]+$')
+      - es_cluster_name is match('^[a-z0-9][a-z0-9_-]*$')
+      - groups['es_master'] | length >= 3
+      - groups['es_master'] | length is odd
+      # o nome curto (antes do 1o ponto) vira node.name e precisa ser unico
+      - groups['elasticsearch'] | map('regex_replace', '[.].*$', '') | unique | length == groups['elasticsearch'] | length
+    fail_msg: "Revise group_vars/ e inventory.yml: versao X.Y.Z, cluster em minusculas, 3+ masters (numero impar) e nomes curtos unicos."
+    quiet: true
+  run_once: true
+
+- name: Validar segredos do vault (os valores nunca são exibidos)
+  ansible.builtin.assert:
+    that:
+      - es_elastic_password | length >= 16
+      - es_kibana_system_password | length >= 16
+      - tls_ca_password | length >= 16
+      - tls_p12_password | length >= 16
+      - kibana_encryption_key_security | length >= 32
+      - kibana_encryption_key_saved_objects | length >= 32
+      - kibana_encryption_key_reporting | length >= 32
+      - es_elastic_password is not search('^GERAR')
+    fail_msg: "Algum segredo do vault.yml esta curto (senhas >= 16, chaves do Kibana >= 32) ou ainda e o texto 'GERAR'."
+    quiet: true
+  run_once: true
+
+- name: Validar papéis e heap deste nó Elasticsearch (heap <= 50% da RAM e <= 31g)
+  ansible.builtin.assert:
+    that:
+      - es_node_roles | length > 0
+      - (inventory_hostname in groups['es_master']) == ('master' in es_node_roles)   # so os masters tem o papel master
+      - es_heap_size is match('^[0-9]+g$')
+      - (es_heap_size | regex_replace('g$', '') | int) <= 31
+      - (es_heap_size | regex_replace('g$', '') | int) * 1024 <= ansible_facts.memtotal_mb * 0.5
+    fail_msg: "{{ inventory_hostname }}: papeis={{ es_node_roles }} heap={{ es_heap_size }} RAM={{ ansible_facts.memtotal_mb }}MB"
+    quiet: true
+  when: inventory_hostname in groups['elasticsearch']
+
+# ----------------------------------------------------------------------------
+# 2) Coleta (cada comando so le informacao)
+# ----------------------------------------------------------------------------
+- name: Horário sincronizado? (chrony/NTP)
+  ansible.builtin.command: timedatectl show -p NTPSynchronized --value
+  register: ntp
+  changed_when: false
+  check_mode: false
+
+- name: Nome curto do servidor (hostname -s)
+  ansible.builtin.command: hostname -s
+  register: hostname_curto
+  changed_when: false
+  check_mode: false
+
+- name: Resolver pelo DNS todos os servidores do inventário, a partir deste servidor
+  # Formato de cada linha:  nome|ip_do_inventario|ips_que_o_DNS_devolveu
+  ansible.builtin.shell: |
+    for par in {% for h in groups['elastic'] %}{{ h }}={{ hostvars[h].ansible_host }} {% endfor %}; do
+      nome=${par%%=*}; ip=${par#*=}
+      achou=$(getent ahostsv4 "$nome" | awk '{print $1}' | sort -u | paste -sd, -)
+      echo "$nome|$ip|${achou:-SEM_RESPOSTA}"
+    done
+  args:
+    executable: /bin/bash
+  register: dns
+  changed_when: false
+  check_mode: false
+
+- name: Resolver os nomes públicos do F5 (kibana e elastic)
+  # Formato:  nome|ips_que_o_DNS_devolveu
+  ansible.builtin.shell: |
+    for nome in {{ f5_vips.keys() | join(' ') }}; do
+      echo "$nome|$(getent ahostsv4 "$nome" | awk '{print $1}' | sort -u | paste -sd, -)"
+    done
+  args:
+    executable: /bin/bash
+  register: dns_f5
+  changed_when: false
+  check_mode: false
+
+- name: Listar portas TCP em escuta (formato  endereco:porta|processo)
+  ansible.builtin.shell: ss -ltnpH | awk '{print $4"|"$6}'
+  args:
+    executable: /bin/bash
+  register: portas
+  changed_when: false
+  check_mode: false
+
+- name: Ler pacotes instalados (para detectar versão diferente da fixada)
+  ansible.builtin.package_facts:
+    manager: rpm
+
+- name: Repositórios do sistema operacional habilitados (necessários para chrony, unzip etc.)
+  ansible.builtin.command: dnf -q repolist --enabled
+  register: repos_so
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Acesso ao repositório e aos downloads da Elastic (artifacts.elastic.co)
+  ansible.builtin.uri:
+    url: "https://artifacts.elastic.co/packages/{{ elastic_version.split('.')[0] }}.x/yum/repodata/repomd.xml"
+    method: HEAD
+    timeout: 20
+  environment: "{{ {'https_proxy': elastic_repo_proxy} if elastic_repo_proxy | length > 0 else {} }}"
+  register: repo_elastic
+  failed_when: false
+  check_mode: false
+
+# ----------------------------------------------------------------------------
+# 3) Avaliação: monta as listas de erros e avisos e mostra tudo
+# ----------------------------------------------------------------------------
+- name: Avaliar os resultados
+  vars:
+    # --- DNS: cada nome do inventario precisa resolver para o IP do inventario
+    linhas_dns: "{{ dns.stdout_lines | map('split', '|') | list }}"
+    erros_dns: >-
+      {%- set e = [] -%}
+      {%- for nome, ip, achou in linhas_dns if ip not in achou.split(',') -%}
+      {%-   set _ = e.append('DNS: ' ~ nome ~ ' resolve para ' ~ achou ~ ' (esperado ' ~ ip ~ ')') -%}
+      {%- endfor -%}
+      {{ e }}
+    # --- F5: nome publico que nao aponta para o VIP vira apenas aviso
+    avisos_f5: >-
+      {%- set e = [] -%}
+      {%- for nome, achou in (dns_f5.stdout_lines | map('split', '|') | list) if f5_vips[nome] not in achou.split(',') -%}
+      {%-   set _ = e.append('F5: ' ~ nome ~ ' resolve para "' ~ achou ~ '" (VIP esperado ' ~ f5_vips[nome] ~ ')') -%}
+      {%- endfor -%}
+      {{ e }}
+    # --- Portas que este servidor vai usar; ocupadas por outro processo = erro
+    portas_alvo: >-
+      {{ ([9200, 9300] if inventory_hostname in groups['elasticsearch'] else [])
+         + ([5601] if inventory_hostname in groups['kibana'] else [])
+         + ([fleet_port] if inventory_hostname in groups['integration'] else []) }}
+    erros_portas: >-
+      {%- set e = [] -%}
+      {%- for l in portas.stdout_lines -%}
+      {%-   for p in portas_alvo if (l.split('|')[0] is search(':' ~ p ~ '$')) and (l.split('|')[1] is not search('java|node|elastic|fleet')) -%}
+      {%-     set _ = e.append('Porta ' ~ p ~ ' ocupada por outro processo: ' ~ l) -%}
+      {%-   endfor -%}
+      {%- endfor -%}
+      {{ e }}
+    # --- Pacote Elastic ja instalado numa versao diferente da fixada
+    erros_versao: >-
+      {%- set e = [] -%}
+      {%- for pkg in ['elasticsearch', 'kibana'] if pkg in ansible_facts.packages
+                     and (ansible_facts.packages[pkg] | map(attribute='version') | list) != [elastic_version] -%}
+      {%-   set _ = e.append(pkg ~ ' ja instalado em versao diferente de ' ~ elastic_version) -%}
+      {%- endfor -%}
+      {{ e }}
+    raiz_livre_gb: "{{ ((ansible_facts.mounts | selectattr('mount', 'eq', '/') | first).size_available / 1073741824) | round(1) }}"
+    erros: >-
+      {{ ([] if ansible_facts.distribution == 'RedHat' and ansible_facts.distribution_major_version == '9'
+           else ['SO nao suportado: ' ~ ansible_facts.distribution ~ ' ' ~ ansible_facts.distribution_version])
+         + ([] if ansible_facts.architecture == 'x86_64' else ['Arquitetura inesperada: ' ~ ansible_facts.architecture])
+         + ([] if raiz_livre_gb | float >= 5 else ['Menos de 5 GB livres em /: ' ~ raiz_livre_gb ~ ' GB'])
+         + ([] if ntp.stdout | trim == 'yes' else ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)'])
+         + ([] if hostname_curto.stdout | trim == inventory_hostname.split('.')[0]
+             else ['hostname -s (' ~ hostname_curto.stdout | trim ~ ') difere do inventario (' ~ inventory_hostname ~ ')'])
+         + ([] if repo_elastic.status | default(0) == 200
+             else ['artifacts.elastic.co inacessivel (proxy/firewall?): ' ~ repo_elastic.msg | default('sem resposta')])
+         + erros_dns + erros_portas + erros_versao }}
+    avisos: >-
+      {{ avisos_f5
+         + ([] if ansible_facts.distribution_version == '9.5' else ['RHEL ' ~ ansible_facts.distribution_version ~ ' (homologado: 9.5)'])
+         + ([] if repos_so.stdout_lines | length > 1 else ['Nenhum repositorio do SO habilitado: dnf nao achara chrony/unzip.']) }}
+  ansible.builtin.debug:
+    msg:
+      erros: "{{ erros }}"
+      avisos: "{{ avisos }}"
+  register: resultado
+
+- name: Reprovar o servidor se houver erros
+  ansible.builtin.assert:
+    that: resultado.msg.erros | length == 0
+    fail_msg: "PRECHECK REPROVADO em {{ inventory_hostname }}: {{ resultado.msg.erros }}"
+    success_msg: "Precheck aprovado em {{ inventory_hostname }}"

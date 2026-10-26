@@ -1,0 +1,34 @@
+---
+# =============================================================================
+#  vault.yml  —  OS 7 SEGREDOS DO PROJETO (exemplo de preenchimento)
+#
+#  ATENCAO: os valores abaixo sao APENAS EXEMPLO. Gere os seus (um comando por valor):
+#      openssl rand -hex 24          # 48 caracteres, sem simbolos que atrapalhem shell/YAML/URL
+#  Depois criptografe e so entao versione:
+#      ansible-vault encrypt vault.yml
+#  No AAP: commite o vault.yml (criptografado) e anexe ao Job Template uma credencial do tipo "Vault".
+#  Guarde a senha do vault num cofre de senhas, nunca no repositorio.
+#
+#  Tamanhos minimos (o precheck confere): senhas >= 16 caracteres; chaves do Kibana >= 32.
+#  Use um valor DIFERENTE para cada variavel.
+# =============================================================================
+
+# Senha do usuario "elastic" (administrador). E o login que voce usa no Kibana.
+es_elastic_password: "bd65a37dee1dd568148491936b7b84effee14964006b5f77"
+
+# Senha do usuario tecnico "kibana_system". Ninguem digita; so o Kibana usa.
+es_kibana_system_password: "31566eb7b10a453eb37708750cfc12a13133cabd0f6302fc"
+
+# Protege as 2 CAs internas (transporte e HTTP).
+# GUARDE: sem ela nao da para emitir certificado novo (ex.: servidor novo no cluster).
+tls_ca_password: "1afac209451b49449523c9e5036f4b8140951fff1d0dd119"
+
+# Protege o certificado (.p12) de cada servidor; fica no keystore dos servicos.
+tls_p12_password: "88facae231aa2754498a696803495cab0ebd78634d9b9a1c"
+
+# Chaves de criptografia do Kibana (objetos salvos, sessoes, relatorios).
+# NUNCA TROQUE depois de instalado: os objetos salvos ficariam ilegiveis. Guarde um backup.
+# O playbook usa a mesma chave nas 3 instancias do Kibana.
+kibana_encryption_key_security: "bf6815411132e25180a1c25ea446e22a4af2ef9e5687ff66"
+kibana_encryption_key_saved_objects: "c715a8be78d1bcfcf5c24d05c689f5e37b0cc54957a59776"
+kibana_encryption_key_reporting: "59b017364657d194e409b3c87f8fa0165dcb6fd2de7abdcd"

@@ -1,0 +1,18 @@
+# {{ ansible_managed }}
+# Somente configuracao de instalacao. Senhas e chaves ficam no kibana.keystore (nunca aqui).
+server.name: {{ inventory_hostname.split('.')[0] }}
+server.host: {{ ansible_host }}
+server.port: 5601
+server.publicBaseUrl: {{ kibana_public_base_url }}
+
+# TLS no Kibana (o F5 faz re-encrypt ate aqui) com certificado da CA HTTP interna
+server.ssl.enabled: true
+server.ssl.keystore.path: /etc/kibana/tls/kibana.p12
+
+# fala com os 8 nos hot, verificando o certificado (os IPs estao no SAN)
+elasticsearch.hosts: {{ groups['es_hot'] | map('extract', hostvars, 'ansible_host') | map('regex_replace', '^', 'https://') | map('regex_replace', '$', ':9200') | list | to_json }}
+elasticsearch.username: kibana_system
+elasticsearch.ssl.certificateAuthorities: ["/etc/kibana/tls/http_ca.crt"]
+elasticsearch.ssl.verificationMode: full
+
+# Logs: o Kibana escreve no journal ->  journalctl -u kibana
