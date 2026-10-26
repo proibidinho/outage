@@ -1,27 +1,10 @@
 ---
-# =============================================================================
-#  ROLE instalacao  —  UM arquivo, dividido em FASES. O site.yml chama o role varias vezes,
-#  cada vez com  fase: <nome>  e nos servidores certos. Cada fase abaixo comeca com
-#  "when: fase == ...", entao so a fase pedida executa.
-#
-#    es_decidir     (3 masters)   o cluster e novo ou ja existe?
-#    es_nos         (1 no por vez) pacote, certificados, configuracao, iniciar e esperar o no entrar
-#    es_final       (16 nos)      marca "cluster formado" + senhas definitivas
-#    kibana         (1 por vez)   pacote, certificados, configuracao, iniciar e esperar
-#    fleet_kibana   (1 vez)       configura o Fleet pela API do Kibana
-#    fleet_servers  (2 integration) certificado + Fleet Server (Elastic Agent)
-#
-#  Reinicio de servico: as tarefas de configuracao fazem "notify: reiniciar servico"; o handler
-#  (handlers/main.yml) so reinicia se algo mudou. Em instalacao nova isso e o proprio "iniciar".
-# =============================================================================
+# ROLE instalacao: um arquivo dividido em FASES (variavel "fase", passada pelo site.yml; cada fase tem "when: fase == ...").
+# Fases: es_decidir, es_nos, es_final, kibana, fleet_kibana, fleet_servers.
+# Configuracao alterada -> notify "reiniciar servico" -> o handler so reinicia se algo mudou.
 
-# #############################################################################
-#  FASE es_decidir  —  o cluster e novo?   (roda nos 3 masters)
-#     0 masters com a marca /etc/elasticsearch/.cluster_uuid -> NOVO (exige -e es_bootstrap_allowed=true)
-#     3 masters com a marca                                  -> ja existe, nao mexe na formacao
-#     1 ou 2                                                 -> estado estranho, PARA
-#  Resultado: variavel  cluster_novo  (true/false) em cada master.
-# #############################################################################
+# ---- FASE es_decidir: o cluster e novo? (nos 3 masters) ----
+# 0 masters com a marca /etc/elasticsearch/.cluster_uuid = NOVO (exige es_bootstrap_allowed=true); 3 = ja existe; 1 ou 2 = para.
 - name: FASE es_decidir
   when: fase == 'es_decidir'
   block:
@@ -50,14 +33,7 @@
       ansible.builtin.set_fact:
         cluster_novo: "{{ masters_com_marca | int == 0 }}"
 
-# #############################################################################
-#  PACOTE (fases es_nos e kibana) — instala o RPM fixado
-#   - repositorio oficial com gpgcheck, chave GPG com fingerprint conferido
-#   - repositorio fica DESABILITADO (enabled=0): so e usado neste comando
-#   - versao travada (dnf versionlock): um "dnf update" nunca atualiza o cluster
-#   - o servico NAO e iniciado aqui (so depois de configurado)
-#   - nunca faz upgrade/downgrade: se ja existir outra versao, para com erro
-# #############################################################################
+# ---- PACOTE (es_nos, kibana): RPM fixado, repo desabilitado, versionlock; nunca faz upgrade/downgrade nem inicia o servico ----
 - name: PACOTE (Elasticsearch ou Kibana)
   when: fase in ['es_nos', 'kibana']
   vars:
@@ -113,19 +89,9 @@
       register: trava
       changed_when: "'ADICIONADO' in trava.stdout"
 
-# #############################################################################
-#  CERTIFICADOS (fases es_nos, kibana, fleet_servers)
-#
-#  PARTE 1 (uma vez, no servidor da CA = 1o master): cria as 2 CAs internas ("transport" no<->no e
-#     "http" clientes->servicos) e emite TODOS os certificados (ES, Kibana, Fleet Server), com SAN =
-#     nome, nome curto e IP. Idempotente: o que existe nao e refeito. Para incluir um servidor novo
-#     depois, apague o .zip do conjunto dele em /root/elastic-ca e rode de novo.
-#  PARTE 2 (em cada servidor): copia SOMENTE os arquivos dele, com dono e permissao corretos.
-#     ES        -> /etc/elasticsearch/tls   transport.p12, http.p12, http_ca.crt
-#     Kibana    -> /etc/kibana/tls          kibana.p12, http_ca.crt
-#     Fleet Srv -> /etc/fleet-server-tls    fleet.crt, fleet.key, http_ca.crt
-#  Os certificados da empresa ficam SO no F5. Aqui tudo e CA interna.
-# #############################################################################
+# ---- CERTIFICADOS (es_nos, kibana, fleet_servers) ----
+# Parte 1 (1o master): cria as 2 CAs internas (transport e http) e emite todos os certificados (SAN = nome, nome curto, IP).
+# Parte 2 (cada servidor): copia so os arquivos dele. Os certificados da empresa ficam so no F5.
 - name: CERTIFICADOS - PARTE 1 (emitir; so no servidor da CA, uma vez)
   when: fase in ['es_nos', 'kibana', 'fleet_servers']
   delegate_to: "{{ ca_host }}"
@@ -286,14 +252,8 @@
       delegate_to: localhost
       become: false
 
-# #############################################################################
-#  FASE es_nos  —  configurar e iniciar UM no Elasticsearch (o play usa serial: 1)
-#
-#  Pacote e certificados ja foram tratados acima. Aqui: pastas, heap, elasticsearch.yml e senhas do keystore.
-#  Mudou algo? -> notify -> o handler reinicia. Depois: garante o servico no ar e espera o no entrar no
-#  cluster com status green antes de passar ao proximo servidor.
-#  Excecao: masters de um cluster NOVO nao esperam (o cluster so forma quando os 3 estao no ar).
-# #############################################################################
+# ---- FASE es_nos: configura e inicia UM no (serial: 1) e espera ele entrar no cluster green ----
+# Masters de cluster NOVO nao esperam (o cluster so forma com os 3 no ar).
 - name: FASE es_nos
   when: fase == 'es_nos'
   block:
@@ -330,10 +290,7 @@
       notify: reiniciar servico
 
     - name: Gravar as senhas no keystore (somente se mudaram)
-      # LEGENDA:
-      #  - as senhas dos .p12 vao para o keystore (nunca para o elasticsearch.yml)
-      #  - bootstrap.password = senha inicial do usuario "elastic"; sai do keystore na fase es_final
-      #  - .keystore_stamp guarda um hash das senhas: igual = nada a fazer (evita reiniciar a toa)
+      # senhas dos .p12 e bootstrap.password vao para o keystore; .keystore_stamp (hash) evita reiniciar a toa
       ansible.builtin.shell: |
         set -eu
         KS={{ es_bin }}/elasticsearch-keystore
@@ -398,14 +355,8 @@
           delay: 10
           changed_when: false
 
-# #############################################################################
-#  FASE es_final  —  depois que TODOS os nos estao no cluster (roda nos 16)
-#   1) cluster novo: grava a marca /etc/elasticsearch/.cluster_uuid nos masters e regrava o
-#      elasticsearch.yml SEM cluster.initial_master_nodes (nao deve ficar la)
-#   2) grava as senhas DEFINITIVAS de "elastic" e "kibana_system"
-#   3) remove bootstrap.password do keystore e cria .security_ok (a senha inicial nao fica guardada)
-#  Reexecutar e seguro: tudo e idempotente.
-# #############################################################################
+# ---- FASE es_final: depois que todos os nos entraram (nos 16) ----
+# Cluster novo: grava a marca .cluster_uuid e tira initial_master_nodes. Define as senhas definitivas e remove bootstrap.password.
 - name: FASE es_final
   when: fase == 'es_final'
   module_defaults:
@@ -486,11 +437,7 @@
       register: remocao
       changed_when: "'REMOVIDO' in remocao.stdout"
 
-# #############################################################################
-#  FASE kibana  —  configurar e iniciar UM Kibana (o play usa serial: 1)
-#  Pasta de dados, kibana.yml, segredos no keystore, servico e espera ficar disponivel.
-#  Pre-requisito: Elasticsearch concluido (a senha do kibana_system ja esta gravada nele).
-# #############################################################################
+# ---- FASE kibana: configura e inicia UM Kibana (serial: 1); precisa do Elasticsearch concluido ----
 - name: FASE kibana
   when: fase == 'kibana'
   block:
@@ -512,8 +459,7 @@
       notify: reiniciar servico
 
     - name: Gravar os segredos no keystore do Kibana (somente se mudaram)
-      # LEGENDA: senha do kibana_system, senha do .p12 e as 3 chaves de criptografia ficam no keystore, nao no kibana.yml.
-      # As 3 chaves NAO podem mudar depois (objetos salvos/alertas/relatorios deixam de abrir). O stamp evita regravar.
+      # senhas e as 3 chaves de criptografia ficam no keystore (as chaves NAO podem mudar depois); o stamp evita regravar
       ansible.builtin.shell: |
         set -eu
         KS=/usr/share/kibana/bin/kibana-keystore
@@ -567,17 +513,7 @@
       delay: 10
       changed_when: false
 
-# #############################################################################
-#  FASE fleet_kibana  —  configura o Fleet pela API do Kibana (uma vez)
-#
-#  O que e o Fleet: o Kibana guarda "politicas" e os agentes (Elastic Agent) as buscam num
-#  Fleet Server (porta 8220). Passos:
-#    1) Fleet setup          (precisa de acesso ao Elastic Package Registry)
-#    2) URL(s) dos Fleet Servers que os agentes vao usar
-#    3) Output padrao: para onde os agentes enviam dados (os 8 hot, validados pela CA http por fingerprint)
-#    4) Politica "fleet-server-policy" (has_fleet_server) que os servidores integration vao usar
-#  Cada passo e idempotente (reexecutar so confirma/atualiza).
-# #############################################################################
+# ---- FASE fleet_kibana: configura o Fleet pela API do Kibana (setup, URLs, output padrao, politica fleet-server-policy) ----
 - name: FASE fleet_kibana
   when: fase == 'fleet_kibana'
   delegate_to: "{{ groups['kibana'][0] }}"
@@ -676,17 +612,8 @@
           monitoring_enabled: [logs, metrics]
       when: politica.status == 404
 
-# #############################################################################
-#  FASE fleet_servers  —  instala o Fleet Server nos servidores "integration"
-#
-#  O Fleet Server e um Elastic Agent instalado em modo Fleet Server (porta 8220). Ele precisa de:
-#    - o pacote do agente (site oficial, com checagem SHA-512)
-#    - um SERVICE TOKEN: credencial que deixa o Fleet Server falar com o Elasticsearch
-#      (NAO e o "enrollment token", que e dos agentes comuns; este projeto nao usa enrollment token)
-#    - o certificado do Fleet Server (emitido pela CA http interna, acima)
-#  Se o agente ja esta instalado, o servidor e pulado — o token nunca e recriado (nao quebra o que funciona).
-#  Para reinstalar: no servidor  elastic-agent uninstall  e rode de novo.
-# #############################################################################
+# ---- FASE fleet_servers: instala o Fleet Server (Elastic Agent, porta 8220) nos servidores integration ----
+# Um service token por servidor (nao e o enrollment token). Agente ja instalado = servidor pulado (o token nao e recriado).
 - name: FASE fleet_servers
   when: fase == 'fleet_servers'
   block:
@@ -747,12 +674,7 @@
               no_log: true
 
         - name: Instalar o Elastic Agent como Fleet Server
-          # LEGENDA das opcoes:
-          #  --url                  endereco que ESTE Fleet Server anuncia (e que o proprio agente local usa)
-          #  --fleet-server-es      Elasticsearch ao qual o Fleet Server se conecta (+ a CA que ele confia)
-          #  --fleet-server-service-token / --fleet-server-policy   credencial e politica criadas acima
-          #  --fleet-server-cert / -key   certificado do Fleet Server (porta 8220)
-          #  --certificate-authorities    CA interna para validar conexoes
+          # --url: endereco que este Fleet Server anuncia; --fleet-server-es: Elasticsearch e CA; token/policy: criados acima; cert/key: porta 8220
           ansible.builtin.command:
             argv:
               - "/root/{{ pacote_agente }}/elastic-agent"

@@ -1,5 +1,0 @@
----
-- name: Encerrar o job com falha porque o e-mail não foi enviado
-  ansible.builtin.fail:
-    msg: "O e-mail não foi enviado: {{ notificacao_erro }}"
-  when: (notificacao_erro | default('', true) | string | length) > 0

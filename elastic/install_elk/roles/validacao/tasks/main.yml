@@ -1,9 +1,5 @@
 ---
-# =============================================================================
-#  ROLE validacao  —  SOMENTE LEITURA. Confere se o ambiente ficou como o inventory.yml e o group_vars descrevem.
-#  Roda nos 21 servidores. Cada bloco usa "when" pelo papel do servidor.
-#  Cada verificacao e um assert: o primeiro que falhar para aquele host, com a mensagem do que esta errado.
-# =============================================================================
+# ROLE validacao: SOMENTE LEITURA. Confere se o ambiente ficou como o inventory.yml e o group_vars descrevem (um assert por item).
 
 # ---------------------------------------------------------------- todos: discos
 - name: Volumes do inventário estão montados em XFS

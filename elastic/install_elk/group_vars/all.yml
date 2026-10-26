@@ -1,40 +1,19 @@
 ---
-# =============================================================================
-#  VARIAVEIS DO AMBIENTE (valem para todos os servidores)
-#
-#  Aqui ficam: o que executar (acao), versao, bastion, nomes do F5, Fleet e constantes.
-#  Variaveis que mudam por grupo de servidores estao nos outros arquivos desta pasta
-#  (es_master.yml, es_hot.yml, ...: papeis do no, heap e discos).
-#  Os segredos NAO ficam aqui: ficam no vault.yml (veja vault.yml.example).
-# =============================================================================
-# ------------------------------------------------------------ O QUE EXECUTAR (condicao)
-# "acao" e a pergunta da survey do AAP (ou  -e acao=...  na linha de comando). Cada role do site.yml tem um "when" nela:
-#   precheck  confere o ambiente e o plano de discos (somente leitura)       <- padrao, nao altera nada
-#   instalar  pre-check + discos + sistema + componentes abaixo
-#   validar   confere o ambiente instalado (somente leitura)
+# Variaveis valem para todos os servidores. Por grupo: es_master.yml, es_hot.yml... Segredos: vault.yml (veja vault.yml.example).
+
+# O que executar (survey do AAP, ou -e acao=...): precheck (padrao, so leitura) | instalar | validar
 acao: precheck
-# componentes que a acao "instalar" executa (tire um da lista para pular)
-componentes: [elasticsearch, kibana, fleet]
+componentes: [elasticsearch, kibana, fleet]      # o que "instalar" executa (tire um para pular)
 
-# ------------------------------------------------------------ versao e cluster
 elastic_version: "9.5.5"
-es_cluster_name: elasticsearch_corp      # NAO pode mudar depois do bootstrap
+es_cluster_name: elasticsearch_corp              # NAO pode mudar depois do bootstrap
 
-# ------------------------------------------------------------ como chegar nos servidores
-# Fluxo:  AAP -> exec node (Lapa) -> bastion -> servidores do cluster.  Tudo como root.
-# O exec node entra no bastion como root (credencial do Job Template) e a conexao SSH com os servidores atravessa o
-# bastion (ProxyCommand em group_vars/elastic.yml).
+# Acesso: exec node -> servidores como root. Se o exec node NAO alcanca os servidores direto, informe o bastion
+# (o SSH atravessa ele, como tunel). Vazio = conexao direta.
 ansible_user: root
-bastion_host: 10.29.148.161              # vazio = conexao direta, sem bastion
+bastion_host: ""                                 # ex.: 10.29.148.161
 bastion_user: root
-# Chave usada para entrar no bastion: por padrao, a que o exec node ja usa (vazio).
-# Se o job nao a enxergar, informe aqui o caminho dela DENTRO do job (veja o README).
-bastion_key_file: ""
-# Quem autentica nos servidores e a chave que o JOB tem, nao a do bastion. Como so o bastion tem chave trocada com os
-# servidores, o job copia essa chave do bastion (temporaria, 0600, apagada no fim). Informe o caminho da chave PRIVADA
-# do root NO BASTION. Vazio = nao copia (use se a chave do exec node ja estiver autorizada nos servidores).
-chave_bastion_vms: /root/.ssh/id_rsa
-chave_vms_local: /tmp/elastic-certs-staging/chave_bastion    # copia temporaria dentro do job
+bastion_key_file: ""                             # vazio = a chave que o exec node ja usa
 
 # ------------------------------------------------------------ nomes publicados no F5
 es_public_name: elastic.claro.com.br

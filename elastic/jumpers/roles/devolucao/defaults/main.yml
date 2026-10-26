@@ -1,6 +1,0 @@
----
-devolucao_ativa: true
-devolucao_playbook: site.yml
-devolucao_timeout: 10
-devolucao_tentativas: 2
-devolucao_intervalo: 5

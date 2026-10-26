@@ -1,6 +1,0 @@
----
-alvo_tentativas: []
-diagnostico_usuario_alvo: root
-diagnostico_timeout_conexao: 10
-diagnostico_timeout_df: 30
-diagnostico_timeout_tarefa: 90

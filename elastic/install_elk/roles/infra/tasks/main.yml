@@ -1,13 +1,6 @@
 ---
-# =============================================================================
-#  ROLE infra  —  configura os servidores (so roda na acao "instalar")
-#
-#   1) DISCOS   cria LVM + XFS e monta no fstab (um volume por vez: volume.yml)
-#   2) SISTEMA  pacotes base, chrony e, nos nos Elasticsearch, kernel/swap/THP/limites
-#
-#  O PLANO de discos (achar os discos crus e conferir quantidade/tamanho) esta no role precheck, que roda antes.
-#  Tudo e idempotente e persistente (sobrevive a reboot). Nao mexe em firewalld/SELinux (decisao do ambiente).
-# =============================================================================
+# ROLE infra (so na acao instalar): 1) DISCOS = LVM + XFS + fstab, um volume por vez (volume.yml); 2) SISTEMA = pacotes, chrony,
+# kernel, swap, THP e limites. O plano de discos vem do role precheck. Idempotente; nao mexe em firewalld/SELinux.
 
 # ------------------------------- 1) DISCOS ---------------------------------
 - name: O plano de discos vem do role precheck (ele precisa ter rodado antes)

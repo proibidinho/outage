@@ -1,16 +1,8 @@
 ---
-# =============================================================================
-#  ROLE precheck  —  SOMENTE LEITURA: nao altera nada nos servidores.
-#
-#  Roda em todos os 21 servidores. Cada verificacao soma o que encontrou em
-#  "erros" ou "avisos"; so no fim o host e reprovado (assim voce ve todos os
-#  problemas de uma vez, e nao um por execucao).
-#  Inclui o plano de discos (secao 4): mostra o que seria formatado e para se nao bater com o group_vars.
-# =============================================================================
+# ROLE precheck: SOMENTE LEITURA, roda nos 21 servidores. Soma erros e avisos e so no fim reprova o host
+# (voce ve todos os problemas de uma vez). Inclui o plano de discos (secao 4).
 
-# ----------------------------------------------------------------------------
-# 1) Parametros do projeto (group_vars/ + inventory.yml + vault.yml). Falha cedo, antes de tudo.
-# ----------------------------------------------------------------------------
+# 1) Parametros do projeto (group_vars/, inventory.yml, vault.yml): falha cedo
 - name: Validar versão, nome do cluster e topologia de masters
   ansible.builtin.assert:
     that:
@@ -51,9 +43,7 @@
     quiet: true
   when: inventory_hostname in groups['elasticsearch']
 
-# ----------------------------------------------------------------------------
 # 2) Coleta (cada comando so le informacao)
-# ----------------------------------------------------------------------------
 - name: Horário sincronizado? (chrony/NTP)
   ansible.builtin.command: timedatectl show -p NTPSynchronized --value
   register: ntp
@@ -121,9 +111,7 @@
   failed_when: false
   check_mode: false
 
-# ----------------------------------------------------------------------------
-# 3) Avaliação: monta as listas de erros e avisos e mostra tudo
-# ----------------------------------------------------------------------------
+# 3) Avaliacao: monta as listas de erros e avisos
 - name: Avaliar os resultados
   vars:
     # --- DNS: cada nome do inventario precisa resolver para o IP do inventario
@@ -190,14 +178,9 @@
     fail_msg: "PRECHECK REPROVADO em {{ inventory_hostname }}: {{ resultado.msg.erros }}"
     success_msg: "Precheck aprovado em {{ inventory_hostname }}"
 
-# ----------------------------------------------------------------------------
-# 4) PLANO DE DISCOS (somente leitura). Em 2 passos:
-#      ACHAR os "discos crus" do servidor  ->  CONFERIR se a quantidade e o tamanho batem com o group_vars/
-#    Se nao bater, PARA (nada foi formatado). O role infra usa estas listas para criar os volumes.
-#    "Disco cru" = disco inteiro SEM particao, SEM volume em cima e SEM nenhuma assinatura (blkid vazio).
-#    Por isso o vg00 e os discos do sistema nunca entram: eles tem assinatura.
-#    Servidores sem "storage_volumes" (ex.: integration) nao participam: o disco deles fica como esta.
-# ----------------------------------------------------------------------------
+# 4) PLANO DE DISCOS (somente leitura): ACHAR os discos crus e CONFERIR quantidade/tamanho com o group_vars/; se nao bater, PARA.
+#    Disco cru = inteiro, sem particao, sem volume e sem assinatura (blkid vazio): vg00 e discos do sistema nunca entram.
+#    Servidores sem storage_volumes (ex.: integration) nao participam.
 - name: Plano de discos
   when: storage_volumes | length > 0
   block:

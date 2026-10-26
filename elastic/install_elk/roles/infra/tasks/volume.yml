@@ -1,14 +1,6 @@
 ---
-# =============================================================================
-#  infra / volume  —  cria UM volume (chamado em loop pelo main.yml)
-#  item = {name, vg, lv, mount, size_gb, count}
-#
-#  Cada modulo e idempotente e equivale ao comando manual:
-#    lvg         ->  pvcreate <discos> + vgcreate/vgextend <vg>
-#    lvol        ->  lvcreate -n <lv> -l 100%FREE <vg>
-#    filesystem  ->  mkfs.xfs /dev/<vg>/<lv>      (nunca sobrescreve outro filesystem)
-#    mount       ->  linha no /etc/fstab + mount
-# =============================================================================
+# infra / volume: cria UM volume (loop do main.yml). item = {name, vg, lv, mount, size_gb, count}
+# lvg = pvcreate + vgcreate | lvol = lvcreate -l 100%FREE | filesystem = mkfs.xfs (nunca sobrescreve) | mount = fstab + mount
 - name: "{{ item.mount }}: escolher os discos (tamanho certo, os primeiros da lista)"
   ansible.builtin.set_fact:
     discos_do_volume: >-

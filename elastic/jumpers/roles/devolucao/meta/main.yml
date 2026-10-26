@@ -1,7 +1,0 @@
----
-galaxy_info:
-  author: Equipe CLBR-TI-OPS-IT-SERVICE-AUTOMATION
-  description: Devolve ao Splunk, pelo HEC, o resultado do job (success, partial ou failure) no mesmo formato da devolução dos outros self-healing, para o episódio ser contabilizado. Só envia com devolucao_ativa true, a credencial Splunk HEC anexada e token real, e nunca falha o job.
-  license: proprietary
-  min_ansible_version: "2.15"
-dependencies: []

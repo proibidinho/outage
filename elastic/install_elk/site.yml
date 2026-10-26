@@ -1,21 +1,12 @@
 ---
-# =============================================================================
-#  site.yml  —  UM unico playbook. Cada ROLE abaixo tem um "when" que olha a variavel  acao
-#  (pergunta da survey do AAP, ou  -e acao=...  na linha de comando):
-#
-#    acao=precheck   role precheck               confere o ambiente e o plano de discos, somente leitura   <- padrao
-#    acao=instalar   roles precheck + infra + instalacao   discos, sistema, Elasticsearch, Kibana, Fleet
-#    acao=validar    role validacao              confere o ambiente instalado, somente leitura
-#
-#  Na acao "instalar", a variavel  componentes  (group_vars/all.yml) escolhe o que instalar:
-#    -e '{"componentes": ["kibana"]}'      so o Kibana (exemplo)
-#  Cluster Elasticsearch NOVO:  -e es_bootstrap_allowed=true   (so na primeira instalacao)
-#
-#  Fluxo de conexao (tudo como root): AAP -> exec node -> bastion -> servidores (veja group_vars/all.yml).
-#  O "hosts:" de cada play diz EM QUAIS servidores; o "when" de cada role diz QUANDO.
-# =============================================================================
+# UM unico playbook: cada role tem um "when" na variavel acao (survey do AAP, ou -e acao=...).
+#   precheck  role precheck                       confere ambiente e plano de discos (somente leitura)   <- padrao
+#   instalar  roles precheck + infra + instalacao discos, sistema, Elasticsearch, Kibana, Fleet
+#   validar   role validacao                      confere o ambiente instalado (somente leitura)
+# "componentes" (group_vars/all.yml) escolhe o que instalar; cluster NOVO exige -e es_bootstrap_allowed=true (so na 1a vez).
+# O "hosts:" de cada play diz EM QUAIS servidores; o "when" de cada role diz QUANDO.
 
-- name: "Conferir os valores de acao e componentes"
+- name: "Conferir acao e componentes"
   hosts: elastic
   connection: local
   run_once: true
@@ -25,17 +16,8 @@
         that:
           - acao in ['precheck', 'instalar', 'validar']
           - componentes | difference(['elasticsearch', 'kibana', 'fleet']) | length == 0
-        fail_msg: "acao deve ser precheck | instalar | validar; componentes so aceita elasticsearch, kibana, fleet."
+        fail_msg: "acao: precheck | instalar | validar. componentes: elasticsearch, kibana, fleet."
         quiet: true
-
-# ---- chave para entrar nos servidores atravessando o bastion (apagada no fim) ----------------------
-- name: "Acesso: copiar a chave do bastion para o job"
-  hosts: elastic
-  gather_facts: false
-  roles:
-    - role: acesso
-      fase: buscar
-      when: chave_bastion_vms | length > 0
 
 # ---- precheck e infra: os 21 servidores ---------------------------------------------------------
 - name: "Precheck (precheck, instalar) e infra (instalar): todos os servidores"
@@ -121,12 +103,3 @@
   roles:
     - role: validacao
       when: acao == 'validar'
-
-# ---- fim: apagar a copia temporaria da chave ----------------------------------------------------
-- name: "Acesso: apagar a cópia da chave"
-  hosts: elastic
-  gather_facts: false
-  roles:
-    - role: acesso
-      fase: limpar
-      when: chave_bastion_vms | length > 0

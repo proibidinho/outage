@@ -1,7 +1,0 @@
----
-galaxy_info:
-  author: Equipe CLBR-TI-OPS-IT-SERVICE-AUTOMATION
-  description: Monta e envia ao time solucionador do tipo do alerta o e-mail com o resumo do alerta, em HTML, com cópia para o time de AIOps. O job só falha se o e-mail não sair.
-  license: proprietary
-  min_ansible_version: "2.15"
-dependencies: []

@@ -1,7 +1,0 @@
----
-galaxy_info:
-  author: Equipe CLBR-TI-OPS-IT-SERVICE-AUTOMATION
-  description: Lê o alerta enviado pelo EDA, identifica o tipo do alerta e o datacenter pela localidade e, só com acessar_servidor true, monta a lista de endereços do servidor do alerta e inclui o jumper do datacenter no inventário da execução.
-  license: proprietary
-  min_ansible_version: "2.15"
-dependencies: []

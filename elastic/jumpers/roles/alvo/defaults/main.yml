@@ -1,6 +1,0 @@
----
-alerta: {}
-alvo_usuario_jumper: root
-alvo_maximo_tentativas: 4
-alvo_jumper_timeout_conexao: 15
-alvo_jumper_retentativas_ssh: 2
