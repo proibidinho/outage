@@ -1,13 +1,14 @@
-- name: Chrony usa o NTP da empresa (comenta o pool padrao do RHEL)
+- name: Chrony - desativar as outras fontes de tempo (pool e server que nao sejam o NTP da empresa)
   ansible.builtin.replace:
     path: /etc/chrony.conf
-    regexp: '^(pool .*)$'
+    regexp: '^((?:pool|server) (?!{{ ntp_server | regex_escape }} ).*)$'
     replace: '# desativado-por-ansible: \1'
   register: chrony_pool
 
 - name: Chrony - servidor NTP da empresa
   ansible.builtin.lineinfile:
     path: /etc/chrony.conf
+    regexp: '^server {{ ntp_server | regex_escape }} '
     line: "server {{ ntp_server }} iburst"
   register: chrony_server
 
