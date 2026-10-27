@@ -1,0 +1,880 @@
+Identity added: /runner/artifacts/3153852/ssh_key_data (root@cbl2am15960)
+Vault password: 
+[WARNING]: Found both group and host with same name: bastion
+
+PLAY [Conferir acao e componentes] *********************************************
+
+TASK [ansible.builtin.assert] **************************************************
+ok: [cbl2am57168]
+
+PLAY [Precheck (precheck, instalar) e infra (instalar): todos os servidores] ***
+
+TASK [Gathering Facts] *********************************************************
+[WARNING]: Host 'cbl2am53296.corp.clarobr' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am53296.corp.clarobr]
+[WARNING]: Host 'cbl2am52901.corp.clarobr' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am52901.corp.clarobr]
+[WARNING]: Host 'cbl2am59521.claro.com.br' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am59521.claro.com.br]
+[WARNING]: Host 'cbl2am57168' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am57168]
+[WARNING]: Host 'cbl2am34537.claro.com.br' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am34537.claro.com.br]
+[WARNING]: Host 'cbl2am04384.claro.com.br' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am04384.claro.com.br]
+[WARNING]: Host 'cbl2am26284' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am26284]
+[WARNING]: Host 'cbl2am82385.claro.com.br' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am82385.claro.com.br]
+[WARNING]: Host 'cbl2am05740.claro.com.br' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am05740.claro.com.br]
+[WARNING]: Host 'cbl2am16165.claro.com.br' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am16165.claro.com.br]
+[WARNING]: Host 'cbl2am05949.claro.com.br' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am05949.claro.com.br]
+[WARNING]: Host 'cbl2am62244.claro.com.br' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am62244.claro.com.br]
+[WARNING]: Host 'cbl2am91456.claro.com.br' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am91456.claro.com.br]
+[WARNING]: Host 'cbl2am86556.claro.com.br' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am86556.claro.com.br]
+[WARNING]: Host 'cbl2am46040.claro.com.br' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am46040.claro.com.br]
+[WARNING]: Host 'cbl2am33867.claro.com.br' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am33867.claro.com.br]
+[WARNING]: Host 'cbl2am94434.corp.clarobr' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am94434.corp.clarobr]
+[WARNING]: Host 'cbl2am22244.claro.com.br' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am22244.claro.com.br]
+[WARNING]: Host 'cbl2am78817.claro.com.br' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am78817.claro.com.br]
+[WARNING]: Host 'cbl2am96314.claro.com.br' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am96314.claro.com.br]
+[WARNING]: Host 'cbl2am24120.claro.com.br' is using the discovered Python interpreter at '/usr/bin/python3.9', but future installation of another Python interpreter could cause a different interpreter to be discovered. See https://docs.ansible.com/ansible-core/2.19/reference_appendices/interpreter_discovery.html for more information.
+ok: [cbl2am24120.claro.com.br]
+
+TASK [precheck : Validar versão, nome do cluster e topologia de masters] *******
+ok: [cbl2am57168]
+
+TASK [precheck : Validar segredos do vault (os valores nunca são exibidos)] ****
+ok: [cbl2am57168]
+
+TASK [precheck : Validar papéis e heap deste nó Elasticsearch (heap <= 50% da RAM e <= 31g)] ***
+skipping: [cbl2am57168]
+skipping: [cbl2am26284]
+skipping: [cbl2am34537.claro.com.br]
+skipping: [cbl2am05949.claro.com.br]
+skipping: [cbl2am16165.claro.com.br]
+ok: [cbl2am24120.claro.com.br]
+ok: [cbl2am78817.claro.com.br]
+ok: [cbl2am91456.claro.com.br]
+ok: [cbl2am46040.claro.com.br]
+ok: [cbl2am59521.claro.com.br]
+ok: [cbl2am62244.claro.com.br]
+ok: [cbl2am82385.claro.com.br]
+ok: [cbl2am04384.claro.com.br]
+ok: [cbl2am05740.claro.com.br]
+ok: [cbl2am22244.claro.com.br]
+ok: [cbl2am33867.claro.com.br]
+ok: [cbl2am52901.corp.clarobr]
+ok: [cbl2am53296.corp.clarobr]
+ok: [cbl2am94434.corp.clarobr]
+ok: [cbl2am86556.claro.com.br]
+ok: [cbl2am96314.claro.com.br]
+
+TASK [precheck : Horário sincronizado? (chrony/NTP)] ***************************
+ok: [cbl2am16165.claro.com.br]
+ok: [cbl2am78817.claro.com.br]
+ok: [cbl2am91456.claro.com.br]
+ok: [cbl2am57168]
+ok: [cbl2am34537.claro.com.br]
+ok: [cbl2am26284]
+ok: [cbl2am24120.claro.com.br]
+ok: [cbl2am05949.claro.com.br]
+ok: [cbl2am59521.claro.com.br]
+ok: [cbl2am04384.claro.com.br]
+ok: [cbl2am22244.claro.com.br]
+ok: [cbl2am53296.corp.clarobr]
+ok: [cbl2am52901.corp.clarobr]
+ok: [cbl2am62244.claro.com.br]
+ok: [cbl2am94434.corp.clarobr]
+ok: [cbl2am82385.claro.com.br]
+ok: [cbl2am46040.claro.com.br]
+ok: [cbl2am86556.claro.com.br]
+ok: [cbl2am33867.claro.com.br]
+ok: [cbl2am05740.claro.com.br]
+ok: [cbl2am96314.claro.com.br]
+
+TASK [precheck : Nome curto do servidor (hostname -s)] *************************
+ok: [cbl2am57168]
+ok: [cbl2am16165.claro.com.br]
+ok: [cbl2am34537.claro.com.br]
+ok: [cbl2am91456.claro.com.br]
+ok: [cbl2am78817.claro.com.br]
+ok: [cbl2am24120.claro.com.br]
+ok: [cbl2am05949.claro.com.br]
+ok: [cbl2am26284]
+ok: [cbl2am59521.claro.com.br]
+ok: [cbl2am04384.claro.com.br]
+ok: [cbl2am22244.claro.com.br]
+ok: [cbl2am52901.corp.clarobr]
+ok: [cbl2am53296.corp.clarobr]
+ok: [cbl2am62244.claro.com.br]
+ok: [cbl2am94434.corp.clarobr]
+ok: [cbl2am46040.claro.com.br]
+ok: [cbl2am82385.claro.com.br]
+ok: [cbl2am86556.claro.com.br]
+ok: [cbl2am05740.claro.com.br]
+ok: [cbl2am33867.claro.com.br]
+ok: [cbl2am96314.claro.com.br]
+
+TASK [precheck : Resolver pelo DNS todos os servidores do inventário, a partir deste servidor] ***
+ok: [cbl2am91456.claro.com.br]
+ok: [cbl2am78817.claro.com.br]
+ok: [cbl2am16165.claro.com.br]
+ok: [cbl2am26284]
+ok: [cbl2am34537.claro.com.br]
+ok: [cbl2am05949.claro.com.br]
+ok: [cbl2am57168]
+ok: [cbl2am24120.claro.com.br]
+ok: [cbl2am59521.claro.com.br]
+ok: [cbl2am22244.claro.com.br]
+ok: [cbl2am04384.claro.com.br]
+ok: [cbl2am46040.claro.com.br]
+ok: [cbl2am53296.corp.clarobr]
+ok: [cbl2am62244.claro.com.br]
+ok: [cbl2am52901.corp.clarobr]
+ok: [cbl2am82385.claro.com.br]
+ok: [cbl2am94434.corp.clarobr]
+ok: [cbl2am86556.claro.com.br]
+ok: [cbl2am05740.claro.com.br]
+ok: [cbl2am33867.claro.com.br]
+ok: [cbl2am96314.claro.com.br]
+
+TASK [precheck : Resolver os nomes públicos do F5 (kibana e elastic)] **********
+ok: [cbl2am78817.claro.com.br]
+ok: [cbl2am34537.claro.com.br]
+ok: [cbl2am05949.claro.com.br]
+ok: [cbl2am57168]
+ok: [cbl2am24120.claro.com.br]
+ok: [cbl2am26284]
+ok: [cbl2am59521.claro.com.br]
+ok: [cbl2am62244.claro.com.br]
+ok: [cbl2am04384.claro.com.br]
+ok: [cbl2am46040.claro.com.br]
+ok: [cbl2am52901.corp.clarobr]
+ok: [cbl2am53296.corp.clarobr]
+ok: [cbl2am94434.corp.clarobr]
+ok: [cbl2am82385.claro.com.br]
+ok: [cbl2am86556.claro.com.br]
+ok: [cbl2am05740.claro.com.br]
+ok: [cbl2am33867.claro.com.br]
+ok: [cbl2am91456.claro.com.br]
+ok: [cbl2am16165.claro.com.br]
+ok: [cbl2am96314.claro.com.br]
+ok: [cbl2am22244.claro.com.br]
+
+TASK [precheck : Listar portas TCP em escuta (formato  endereco:porta|processo)] ***
+ok: [cbl2am34537.claro.com.br]
+ok: [cbl2am26284]
+ok: [cbl2am57168]
+ok: [cbl2am16165.claro.com.br]
+ok: [cbl2am78817.claro.com.br]
+ok: [cbl2am24120.claro.com.br]
+ok: [cbl2am91456.claro.com.br]
+ok: [cbl2am05949.claro.com.br]
+ok: [cbl2am59521.claro.com.br]
+ok: [cbl2am22244.claro.com.br]
+ok: [cbl2am53296.corp.clarobr]
+ok: [cbl2am04384.claro.com.br]
+ok: [cbl2am94434.corp.clarobr]
+ok: [cbl2am46040.claro.com.br]
+ok: [cbl2am52901.corp.clarobr]
+ok: [cbl2am82385.claro.com.br]
+ok: [cbl2am86556.claro.com.br]
+ok: [cbl2am05740.claro.com.br]
+ok: [cbl2am33867.claro.com.br]
+ok: [cbl2am96314.claro.com.br]
+ok: [cbl2am62244.claro.com.br]
+
+TASK [precheck : Ler pacotes instalados (para detectar versão diferente da fixada)] ***
+ok: [cbl2am78817.claro.com.br]
+ok: [cbl2am16165.claro.com.br]
+ok: [cbl2am91456.claro.com.br]
+ok: [cbl2am24120.claro.com.br]
+ok: [cbl2am26284]
+ok: [cbl2am57168]
+ok: [cbl2am34537.claro.com.br]
+ok: [cbl2am59521.claro.com.br]
+ok: [cbl2am05949.claro.com.br]
+ok: [cbl2am53296.corp.clarobr]
+ok: [cbl2am52901.corp.clarobr]
+ok: [cbl2am94434.corp.clarobr]
+ok: [cbl2am04384.claro.com.br]
+ok: [cbl2am22244.claro.com.br]
+ok: [cbl2am62244.claro.com.br]
+ok: [cbl2am82385.claro.com.br]
+ok: [cbl2am86556.claro.com.br]
+ok: [cbl2am46040.claro.com.br]
+ok: [cbl2am05740.claro.com.br]
+ok: [cbl2am33867.claro.com.br]
+ok: [cbl2am96314.claro.com.br]
+
+TASK [precheck : Repositórios do sistema operacional habilitados (necessários para chrony, unzip etc.)] ***
+ok: [cbl2am57168]
+ok: [cbl2am26284]
+ok: [cbl2am16165.claro.com.br]
+ok: [cbl2am78817.claro.com.br]
+ok: [cbl2am91456.claro.com.br]
+ok: [cbl2am24120.claro.com.br]
+ok: [cbl2am05949.claro.com.br]
+ok: [cbl2am22244.claro.com.br]
+ok: [cbl2am59521.claro.com.br]
+ok: [cbl2am34537.claro.com.br]
+ok: [cbl2am52901.corp.clarobr]
+ok: [cbl2am04384.claro.com.br]
+ok: [cbl2am53296.corp.clarobr]
+ok: [cbl2am62244.claro.com.br]
+ok: [cbl2am94434.corp.clarobr]
+ok: [cbl2am46040.claro.com.br]
+ok: [cbl2am82385.claro.com.br]
+ok: [cbl2am86556.claro.com.br]
+ok: [cbl2am05740.claro.com.br]
+ok: [cbl2am33867.claro.com.br]
+ok: [cbl2am96314.claro.com.br]
+
+TASK [precheck : Acesso ao repositório e aos downloads da Elastic (artifacts.elastic.co)] ***
+ok: [cbl2am16165.claro.com.br]
+ok: [cbl2am34537.claro.com.br]
+ok: [cbl2am26284]
+ok: [cbl2am57168]
+ok: [cbl2am78817.claro.com.br]
+ok: [cbl2am91456.claro.com.br]
+ok: [cbl2am24120.claro.com.br]
+ok: [cbl2am05949.claro.com.br]
+ok: [cbl2am59521.claro.com.br]
+ok: [cbl2am04384.claro.com.br]
+ok: [cbl2am22244.claro.com.br]
+ok: [cbl2am46040.claro.com.br]
+ok: [cbl2am52901.corp.clarobr]
+ok: [cbl2am53296.corp.clarobr]
+ok: [cbl2am62244.claro.com.br]
+ok: [cbl2am82385.claro.com.br]
+ok: [cbl2am94434.corp.clarobr]
+ok: [cbl2am05740.claro.com.br]
+ok: [cbl2am86556.claro.com.br]
+ok: [cbl2am33867.claro.com.br]
+ok: [cbl2am96314.claro.com.br]
+
+TASK [precheck : Avaliar os resultados] ****************************************
+ok: [cbl2am57168] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+ok: [cbl2am26284] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)"
+        ]
+    }
+}
+ok: [cbl2am34537.claro.com.br] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+ok: [cbl2am05949.claro.com.br] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+ok: [cbl2am16165.claro.com.br] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+ok: [cbl2am24120.claro.com.br] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+ok: [cbl2am78817.claro.com.br] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+ok: [cbl2am91456.claro.com.br] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+ok: [cbl2am46040.claro.com.br] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+ok: [cbl2am59521.claro.com.br] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+ok: [cbl2am62244.claro.com.br] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+ok: [cbl2am82385.claro.com.br] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+ok: [cbl2am04384.claro.com.br] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+ok: [cbl2am05740.claro.com.br] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+ok: [cbl2am22244.claro.com.br] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+ok: [cbl2am33867.claro.com.br] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+ok: [cbl2am52901.corp.clarobr] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+ok: [cbl2am53296.corp.clarobr] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+ok: [cbl2am94434.corp.clarobr] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+ok: [cbl2am86556.claro.com.br] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+ok: [cbl2am96314.claro.com.br] => {
+    "msg": {
+        "avisos": [
+            "F5: kibana.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.75)",
+            "F5: elastic.claro.com.br resolve para \\"\\" (VIP esperado 10.29.177.76)",
+            "RHEL 9.8 (homologado: 9.5)"
+        ],
+        "erros": [
+            "Relogio nao sincronizado (timedatectl NTPSynchronized != yes)",
+            "DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)",
+            "DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)"
+        ]
+    }
+}
+
+TASK [precheck : Reprovar o servidor se houver erros] **************************
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am57168: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am57168]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am57168: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am26284: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am26284]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am26284: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am34537.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am34537.claro.com.br]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am34537.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am05949.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am05949.claro.com.br]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am05949.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am16165.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am16165.claro.com.br]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am16165.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am24120.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am24120.claro.com.br]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am24120.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am78817.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am78817.claro.com.br]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am78817.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am91456.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am91456.claro.com.br]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am91456.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am46040.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am46040.claro.com.br]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am46040.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am59521.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am59521.claro.com.br]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am59521.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am62244.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am62244.claro.com.br]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am62244.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am82385.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am82385.claro.com.br]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am82385.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am04384.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am04384.claro.com.br]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am04384.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am05740.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am05740.claro.com.br]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am05740.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am22244.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am22244.claro.com.br]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am22244.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am33867.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am33867.claro.com.br]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am33867.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am52901.corp.clarobr: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am52901.corp.clarobr]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am52901.corp.clarobr: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am53296.corp.clarobr: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am53296.corp.clarobr]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am53296.corp.clarobr: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am94434.corp.clarobr: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am94434.corp.clarobr]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am94434.corp.clarobr: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am86556.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am86556.claro.com.br]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am86556.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+[ERROR]: Task failed: Action failed: PRECHECK REPROVADO em cbl2am96314.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']
+Origin: /runner/project/roles/precheck/tasks/main.yml:175:3
+
+173   register: resultado
+174
+175 - name: Reprovar o servidor se houver erros
+      ^ column 3
+
+fatal: [cbl2am96314.claro.com.br]: FAILED! => {
+    "assertion": "resultado.msg.erros | length == 0",
+    "changed": false,
+    "evaluated_to": false,
+    "msg": "PRECHECK REPROVADO em cbl2am96314.claro.com.br: ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)', 'DNS: cbl2am57168 resolve para SEM_RESPOSTA (esperado 10.29.88.217)', 'DNS: cbl2am26284 resolve para SEM_RESPOSTA (esperado 10.29.88.216)']"
+}
+
+PLAY RECAP *********************************************************************
+cbl2am04384.claro.com.br   : ok=11   changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+cbl2am05740.claro.com.br   : ok=11   changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+cbl2am05949.claro.com.br   : ok=10   changed=0    unreachable=0    failed=1    skipped=1    rescued=0    ignored=0   
+cbl2am16165.claro.com.br   : ok=10   changed=0    unreachable=0    failed=1    skipped=1    rescued=0    ignored=0   
+cbl2am22244.claro.com.br   : ok=11   changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+cbl2am24120.claro.com.br   : ok=11   changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+cbl2am26284                : ok=10   changed=0    unreachable=0    failed=1    skipped=1    rescued=0    ignored=0   
+cbl2am33867.claro.com.br   : ok=11   changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+cbl2am34537.claro.com.br   : ok=10   changed=0    unreachable=0    failed=1    skipped=1    rescued=0    ignored=0   
+cbl2am46040.claro.com.br   : ok=11   changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+cbl2am52901.corp.clarobr   : ok=11   changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+cbl2am53296.corp.clarobr   : ok=11   changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+cbl2am57168                : ok=13   changed=0    unreachable=0    failed=1    skipped=1    rescued=0    ignored=0   
+cbl2am59521.claro.com.br   : ok=11   changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+cbl2am62244.claro.com.br   : ok=11   changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+cbl2am78817.claro.com.br   : ok=11   changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+cbl2am82385.claro.com.br   : ok=11   changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+cbl2am86556.claro.com.br   : ok=11   changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+cbl2am91456.claro.com.br   : ok=11   changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+cbl2am94434.corp.clarobr   : ok=11   changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+cbl2am96314.claro.com.br   : ok=11   changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
