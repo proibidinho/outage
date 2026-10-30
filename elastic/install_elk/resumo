@@ -1,0 +1,13 @@
+
+- name: "Resumo de acesso"
+  hosts: es_master[0]
+  gather_facts: false
+  tasks:
+    - name: Mostrar URLs e usuário
+      ansible.builtin.debug:
+        msg:
+          - "Elasticsearch: https://{{ es_public_name }}:9200 (F5) ou https://{{ ansible_host }}:9200 (direto)"
+          - "Kibana: https://{{ kibana_public_name }} (F5) ou https://{{ hostvars[groups['kibana'][0]].ansible_host }}:5601 (direto)"
+          - "Fleet: https://{{ fleet_public_name if fleet_public_name | length > 0 else hostvars[groups['integration'][0]].ansible_host }}:{{ fleet_port }}"
+          - "Usuário: elastic. A senha é a es_elastic_password do vault (não é exibida no log)."
+      when: acao in ['instalar', 'validar']
