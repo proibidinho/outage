@@ -1,0 +1,52 @@
+---
+# Variaveis valem para todos os servidores. Por grupo: es_master.yml, es_hot.yml... Segredos: vault.yml (veja vault.yml.example).
+
+# O que executar (survey do AAP, ou -e acao=...): precheck (padrao, so leitura) | instalar | validar
+acao: precheck
+componentes: [elasticsearch, kibana, fleet]      # o que "instalar" executa (tire um para pular)
+
+elastic_version: "9.5.5"
+es_cluster_name: elasticsearch_corp              # NAO pode mudar depois do bootstrap
+ntp_server: 10.29.4.200                          # servidor NTP da empresa (o infra grava no chrony)
+
+# Acesso: exec node -> servidores como root. Se o exec node NAO alcanca os servidores direto, informe o bastion
+# (o SSH atravessa ele, como tunel). Vazio = conexao direta.
+ansible_user: root
+bastion_host: ""                                 # ex.: 10.29.148.161
+bastion_user: root
+bastion_key_file: ""                             # vazio = a chave que o exec node ja usa
+
+# ------------------------------------------------------------ nomes publicados no F5
+es_public_name: elastic.claro.com.br
+kibana_public_name: kibana.claro.com.br
+kibana_public_base_url: "https://kibana.claro.com.br"
+f5_vips:                                 # o precheck confere se o DNS aponta para o VIP
+  kibana.claro.com.br: 10.29.177.75
+  elastic.claro.com.br: 10.29.177.76
+
+# ------------------------------------------------------------ Fleet (servidores "integration")
+fleet_port: 8220
+# Opcional: nome do VIP no F5 que balanceia os 2 Fleet Servers (ex.: fleet.claro.com.br).
+# Vazio = os agentes recebem as duas URLs (IP de cada servidor), sem F5.
+fleet_public_name: "fleet.claro.com.br"
+
+# ------------------------------------------------------------ pacotes
+elastic_repo_proxy: "http://10.29.177.37:8080"   # proxy para artifacts.elastic.co e epr.elastic.co (vazio = internet direta)
+
+# ------------------------------------------------------------ seguranca do bootstrap
+# Cluster NOVO so e formado com:  -e es_bootstrap_allowed=true  (somente na primeira vez)
+es_bootstrap_allowed: false
+
+# ------------------------------------------------------------ discos
+# Cada grupo declara os seus (es_hot.yml etc.). Quem nao declara (ex.: integration) nao recebe disco de dados.
+storage_volumes: []
+
+# ------------------------------------------------------------ constantes (nao mexer)
+es_api_host: "{{ groups['es_master'][0] }}"      # no usado para chamar a API
+es_api_url: "https://{{ hostvars[groups['es_master'][0]].ansible_host }}:9200"
+es_tls_dir: /etc/elasticsearch/tls
+es_bin: /usr/share/elasticsearch/bin
+es_marker: /etc/elasticsearch/.cluster_uuid       # marca "este cluster ja foi formado"
+ca_host: "{{ groups['es_master'][0] }}"           # servidor onde ficam as CAs internas
+ca_dir: /root/elastic-ca
+cert_staging: /tmp/elastic-certs-staging          # area temporaria no controlador
