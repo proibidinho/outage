@@ -66,13 +66,13 @@ Você declara em `group_vars/` apenas **tamanho e quantidade** por volume (`stor
    Sobrou ou faltou disco → para e **nada é formatado** em nenhum servidor.
 3. **Criar** cada volume (infra, `volume.yml`): `lvg`, `lvol`, `filesystem` (xfs) e `mount`, um VG próprio por volume.
 
-`acao=precheck` mostra o plano sem formatar nada. Pontos já montados são ignorados. O fstab fica **sem `nofail`** de propósito.
+`acao=precheck` mostra o plano sem formatar nada. Pontos já montados são ignorados. 
 Servidores sem `storage_volumes` (os `integration`) ficam fora do plano.
 
 ## 6. Fleet
 
 - Os 2 servidores `integration` são os **Fleet Servers** (porta 8220). Os certificados deles são emitidos pelo projeto (CA http interna).
-- **F5 é opcional.** Sem F5, os agentes recebem as 2 URLs e fazem failover. Com F5: VIP na 8220 em *TCP/SSL passthrough*, *idle timeout* ≥ 10 min,
+- **F5 é opcional.** Sem F5, os agentes recebem as 2 URLs e fazem failover. Com F5: VIP na 8220 em *TCP/SSL passthrough*,
   e `fleet_public_name` em `group_vars/all.yml` antes de instalar `elasticsearch` e `fleet`.
 - O **service token** de cada Fleet Server é criado pelo playbook (não é o *enrollment token*, que você gera no Kibana para os agentes comuns).
 - A licença Enterprise não bloqueia nada: o Fleet funciona na Basic. O Kibana precisa alcançar `epr.elastic.co`.
@@ -80,6 +80,7 @@ Servidores sem `storage_volumes` (os `integration`) ficam fora do plano.
 ## 7. F5 e certificados
 
 - Os certificados **da empresa ficam só no F5**; os servidores usam **CAs internas** (transporte e http). VIP Kibana `10.29.177.75` → 3 Kibana (5601, HTTPS);
+  VIP Fleet `10.29.177.77` → 2 Fleet (8220, HTTPS);
   VIP Elasticsearch `10.29.177.76` → nós hot (9200, HTTPS).
 - Para o F5 validar o backend, a CA http pública está no primeiro master em `/root/elastic-ca/ca_http/ca/ca.crt`.
   **Faça backup seguro de `/root/elastic-ca`** (contém as chaves das CAs).

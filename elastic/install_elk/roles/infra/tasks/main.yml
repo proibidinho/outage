@@ -28,11 +28,30 @@
     name: [chrony, openssl, unzip, python3-dnf-plugin-versionlock]
     state: present
 
+- name: Chrony - desativar as outras fontes de tempo (pool e server que nao sejam o NTP da empresa)
+  ansible.builtin.replace:
+    path: /etc/chrony.conf
+    regexp: '^((?:pool|server) (?!{{ ntp_server | regex_escape }} ).*)$'
+    replace: '# desativado-por-ansible: \1'
+  register: chrony_pool
+
+- name: Chrony - servidor NTP da empresa
+  ansible.builtin.lineinfile:
+    path: /etc/chrony.conf
+    regexp: '^server {{ ntp_server | regex_escape }} '
+    line: "server {{ ntp_server }} iburst"
+  register: chrony_server
+
 - name: Garantir chronyd habilitado e ativo (cluster exige relogios sincronizados)
   ansible.builtin.systemd_service:
     name: chronyd
-    state: started
+    state: "{{ 'restarted' if (chrony_pool is changed or chrony_server is changed) else 'started' }}"
     enabled: true
+
+- name: Acertar o relogio agora (so se o chrony foi reconfigurado)
+  ansible.builtin.command: chronyc makestep
+  when: chrony_pool is changed or chrony_server is changed
+  changed_when: true
 
 # ----------------------------- somente nos Elasticsearch ---------------------
 - name: Ajustes do sistema exigidos pelo Elasticsearch
@@ -102,6 +121,9 @@
       ansible.builtin.copy:
         dest: /etc/systemd/system/elasticsearch.service.d/override.conf
         content: |
+          [Unit]
+          RequiresMountsFor=/var/lib/elasticsearch /var/log/elasticsearch
+
           [Service]
           LimitMEMLOCK=infinity
           LimitNOFILE=65535

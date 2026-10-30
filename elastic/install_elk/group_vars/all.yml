@@ -5,6 +5,7 @@
 acao: precheck
 componentes: [elasticsearch, kibana, fleet]      # o que "instalar" executa (tire um para pular)
 
+ntp_server: 10.29.4.200
 elastic_version: "9.5.5"
 es_cluster_name: elasticsearch_corp              # NAO pode mudar depois do bootstrap
 
@@ -22,15 +23,16 @@ kibana_public_base_url: "https://kibana.claro.com.br"
 f5_vips:                                 # o precheck confere se o DNS aponta para o VIP
   kibana.claro.com.br: 10.29.177.75
   elastic.claro.com.br: 10.29.177.76
+  fleet.claro.com.br: 10.29.177.77
 
 # ------------------------------------------------------------ Fleet (servidores "integration")
 fleet_port: 8220
 # Opcional: nome do VIP no F5 que balanceia os 2 Fleet Servers (ex.: fleet.claro.com.br).
 # Vazio = os agentes recebem as duas URLs (IP de cada servidor), sem F5.
-fleet_public_name: ""
+fleet_public_name: "fleet.claro.com.br"
 
 # ------------------------------------------------------------ pacotes
-elastic_repo_proxy: ""                   # ex.: http://proxy:3128 (vazio = internet direta)
+elastic_repo_proxy: "http://10.29.177.37:8080"                   # ex.: http://proxy:3128 (vazio = internet direta)
 
 # ------------------------------------------------------------ seguranca do bootstrap
 # Cluster NOVO so e formado com:  -e es_bootstrap_allowed=true  (somente na primeira vez)

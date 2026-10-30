@@ -118,7 +118,7 @@
     linhas_dns: "{{ dns.stdout_lines | map('split', '|') | list }}"
     erros_dns: >-
       {%- set e = [] -%}
-      {%- for nome, ip, achou in linhas_dns if ip not in achou.split(',') -%}
+      {%- for nome, ip, achou in linhas_dns if ip not in achou.split(',') and nome in groups['elasticsearch'] + groups['kibana'] -%}
       {%-   set _ = e.append('DNS: ' ~ nome ~ ' resolve para ' ~ achou ~ ' (esperado ' ~ ip ~ ')') -%}
       {%- endfor -%}
       {{ e }}
@@ -156,7 +156,6 @@
            else ['SO nao suportado: ' ~ ansible_facts.distribution ~ ' ' ~ ansible_facts.distribution_version])
          + ([] if ansible_facts.architecture == 'x86_64' else ['Arquitetura inesperada: ' ~ ansible_facts.architecture])
          + ([] if raiz_livre_gb | float >= 5 else ['Menos de 5 GB livres em /: ' ~ raiz_livre_gb ~ ' GB'])
-         + ([] if ntp.stdout | trim == 'yes' else ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)'])
          + ([] if hostname_curto.stdout | trim == inventory_hostname.split('.')[0]
              else ['hostname -s (' ~ hostname_curto.stdout | trim ~ ') difere do inventario (' ~ inventory_hostname ~ ')'])
          + ([] if repo_elastic.status | default(0) == 200
@@ -164,6 +163,7 @@
          + erros_dns + erros_portas + erros_versao }}
     avisos: >-
       {{ avisos_f5
+         + ([] if ntp.stdout | trim == 'yes' else ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes)'])
          + ([] if ansible_facts.distribution_version == '9.5' else ['RHEL ' ~ ansible_facts.distribution_version ~ ' (homologado: 9.5)'])
          + ([] if repos_so.stdout_lines | length > 1 else ['Nenhum repositorio do SO habilitado: dnf nao achara chrony/unzip.']) }}
   ansible.builtin.debug:

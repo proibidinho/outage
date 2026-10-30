@@ -1,5 +1,6 @@
 ---
 # Somente servidores e grupos. As variaveis estao em group_vars/.
+#Não apagar, somente alterar caso neessario para novos usos. Este inventario é syncronizado no AAP
 all:
   children:
     elastic:
