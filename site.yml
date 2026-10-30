@@ -76,7 +76,7 @@
         fail_msg:
           - "Preciso de {{ data_disk_count }} disco(s) virgem(ns) de ~{{ data_volume.disk_gb }} GiB (sem partição e sem filesystem) e achei {{ discos.stdout_lines }}."
           - "Nenhum disco foi tocado. Discos do servidor:"
-          - "{{ lsblk.stdout_lines }}"
+          - "{{ lsblk.stdout_lines | join('\n') }}"
       when: not volume.stat.exists
 
     - name: Discos que serão usados
