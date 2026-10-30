@@ -1,0 +1,18 @@
+---
+# vault.yml: 4 segredos. Gere os valores (um comando por valor) e criptografe antes de versionar:
+#     openssl rand -hex 24
+#     ansible-vault encrypt vault.yml
+# No AAP: commite o vault.yml criptografado e anexe ao Job Template uma credencial do tipo "Vault".
+# Troque os valores abaixo (sao so exemplo) e use um valor DIFERENTE para cada variavel.
+
+# Senha do usuario "elastic" (administrador).
+es_elastic_password: "TROQUE-gere-com-openssl-rand-hex-24"
+
+# Protege o certificado HTTPS (.p12); fica no keystore do Elasticsearch.
+tls_p12_password: "TROQUE-gere-com-openssl-rand-hex-24"
+
+# Senha do usuario tecnico "kibana". Ninguem digita; so o Kibana usa (fica no kibana.yml, modo 0640).
+kibana_password: "TROQUE-gere-com-openssl-rand-hex-24"
+
+# Chave de criptografia do Kibana (sessoes e relatorios), minimo 32 caracteres. Nao troque depois de instalado.
+kibana_encryption_key: "TROQUE-gere-com-openssl-rand-hex-24"

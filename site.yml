@@ -1,19 +1,20 @@
 ---
-# Elasticsearch 6.8 (licenca free/Basic), um unico no. Um playbook, na ordem:
+# Elasticsearch + Kibana 6.8 (licenca free/Basic), um unico servidor. Um playbook, na ordem:
 #   1 conferir (somente leitura)  2 disco  3 sistema  4 Java + pacote
-#   5 certificado HTTPS + keystore  6 configuracao  7 start + senha do "elastic"  8 validacao
+#   5 certificado HTTPS + keystore  6 configuracao  7 start + senha do "elastic"  8 validacao  9 Kibana
 # Pode rodar de novo: o que ja esta pronto nao muda.
 - name: Elasticsearch 6.8 single node
   hosts: es68
   gather_facts: true
-  vars_files: [vault.yml]               # es_elastic_password, tls_p12_password
+  vars_files: [vault.yml]               # es_elastic_password, tls_p12_password, kibana_password, kibana_encryption_key
   vars:
     es_version: "6.8.23"                # ultima da serie 6.8
     es_cluster_name: es68
     es_heap: 30g                        # metade da RAM, abaixo do limite de ponteiros comprimidos (conferido no final)
     es_java_pkg: java-11-openjdk-headless
     es_java_home: /usr/lib/jvm/jre-11-openjdk
-    es_extra_dns: []                    # nomes extras no certificado (ex.: nome de um VIP)
+    es_extra_dns: []                    # nomes extras no certificado do Elasticsearch (ex.: nome de um VIP)
+    kibana_extra_dns: []                # idem, no certificado do Kibana
     ntp_server: 10.29.4.200
     elastic_repo_proxy: ""              # proxy para baixar o RPM (vazio = direto)
     data_volume: {vg: vg_esdata, lv: lv_esdata, mount: /var/lib/elasticsearch, disk_gb: 1024}
@@ -407,14 +408,131 @@
           Algo difere do esperado (versão {{ es_version }}, cluster green/yellow com 1 nó, licença basic, heap com ponteiros comprimidos).
           Se foi o heap, reduza es_heap para 26g.
 
+    # ====================================== 9) KIBANA ======================================
+    # Mesmo servidor, mesma versao, HTTPS com a mesma CA interna. Usa o usuario tecnico "kibana" (so o Kibana usa).
+    - name: Gravar a senha do usuário kibana no cluster
+      ansible.builtin.uri:
+        url: "{{ es_url }}/_xpack/security/user/kibana/_password"
+        method: PUT
+        body:
+          password: "{{ kibana_password }}"
+      no_log: true
+
+    - name: Baixar o RPM do Kibana (confere o SHA-512)
+      ansible.builtin.get_url:
+        url: "https://artifacts.elastic.co/downloads/kibana/kibana-{{ es_version }}-x86_64.rpm"
+        dest: "/root/kibana-{{ es_version }}-x86_64.rpm"
+        checksum: "sha512:https://artifacts.elastic.co/downloads/kibana/kibana-{{ es_version }}-x86_64.rpm.sha512"
+        mode: "0644"
+      environment: "{{ {'https_proxy': elastic_repo_proxy} if elastic_repo_proxy | length > 0 else {} }}"
+
+    - name: Instalar o Kibana (traz o próprio Node.js)
+      ansible.builtin.dnf:
+        name: "/root/kibana-{{ es_version }}-x86_64.rpm"
+        state: present
+        disable_gpg_check: true
+
+    - name: Pasta dos certificados do Kibana
+      ansible.builtin.file:
+        path: /etc/kibana/certs
+        state: directory
+        owner: root
+        group: kibana
+        mode: "0750"
+
+    - name: Gerar o certificado HTTPS do Kibana (certutil cert, PEM)
+      ansible.builtin.shell: >-
+        {{ es_bin }}/elasticsearch-certutil cert --pem --ca-cert {{ ca_dir }}/ca.crt --ca-key {{ ca_dir }}/ca.key
+        --days 1825 --name kibana --pass "" --out {{ ca_dir }}/kibana.zip
+        --dns {{ ([inventory_hostname, ansible_facts.fqdn, 'localhost'] + kibana_extra_dns) | unique | join(',') }}
+        --ip {{ ansible_host }},127.0.0.1
+        && unzip -oj {{ ca_dir }}/kibana.zip -d /etc/kibana/certs
+        && test -f /etc/kibana/certs/kibana.crt && test -f /etc/kibana/certs/kibana.key
+      args:
+        creates: /etc/kibana/certs/kibana.key
+
+    - name: Copiar a CA para o Kibana confiar no Elasticsearch
+      ansible.builtin.copy:
+        src: "{{ ca_dir }}/ca.crt"
+        dest: /etc/kibana/certs/ca.crt
+        remote_src: true
+        owner: root
+        group: kibana
+        mode: "0640"
+
+    - name: Permissão do certificado e da chave do Kibana
+      ansible.builtin.file:
+        path: "/etc/kibana/certs/{{ item }}"
+        owner: root
+        group: kibana
+        mode: "0640"
+      loop: [kibana.crt, kibana.key]
+
+    # A senha do usuario kibana fica no kibana.yml (modo 0640, so root e kibana leem).
+    - name: Gravar o kibana.yml
+      ansible.builtin.copy:
+        dest: /etc/kibana/kibana.yml
+        owner: root
+        group: kibana
+        mode: "0640"
+        content: |
+          # {{ ansible_managed }}
+          server.host: "{{ ansible_host }}"
+          server.port: 5601
+          server.name: "{{ inventory_hostname }}"
+          server.ssl.enabled: true
+          server.ssl.certificate: /etc/kibana/certs/kibana.crt
+          server.ssl.key: /etc/kibana/certs/kibana.key
+          elasticsearch.hosts: ["{{ es_url }}"]
+          elasticsearch.username: kibana
+          elasticsearch.password: "{{ kibana_password }}"
+          elasticsearch.ssl.certificateAuthorities: ["/etc/kibana/certs/ca.crt"]
+          elasticsearch.ssl.verificationMode: full
+          xpack.security.encryptionKey: "{{ kibana_encryption_key }}"
+          xpack.reporting.encryptionKey: "{{ kibana_encryption_key }}"
+      notify: reiniciar kibana
+      no_log: true
+
+    - name: Aplicar as mudanças pendentes do Kibana
+      ansible.builtin.meta: flush_handlers
+
+    - name: Garantir o Kibana ativo e habilitado
+      ansible.builtin.systemd:
+        name: kibana
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    # Na primeira vez o Kibana 6.8 otimiza os bundles e pode levar alguns minutos.
+    - name: Aguardar o Kibana ficar verde
+      ansible.builtin.uri:
+        url: "https://{{ ansible_host }}:5601/api/status"
+      register: kb
+      until: kb is succeeded and kb.json.status.overall.state | default('') == 'green'
+      retries: 60
+      delay: 10
+
+    - name: Conferir a versão do Kibana
+      ansible.builtin.assert:
+        that: kb.json.version.number == es_version
+        fail_msg: "Kibana na versão {{ kb.json.version.number }}, esperado {{ es_version }}."
+
     - name: Resumo
       ansible.builtin.debug:
         msg:
           - "Elasticsearch {{ es_version }} no ar em {{ es_url }} (usuário elastic)"
+          - "Kibana {{ es_version }} no ar em https://{{ ansible_host }}:5601 (entre com o usuário elastic)"
           - "Saúde do cluster: {{ api.results[1].json.status }}. Licença: {{ api.results[2].json.license.type }}"
           - "CA para os clientes confiarem: {{ ca_dir }}/ca.crt"
 
   handlers:
+    - name: reiniciar kibana
+      ansible.builtin.systemd:
+        name: kibana
+        state: restarted
+        enabled: true
+        daemon_reload: true
+
     - name: reiniciar chronyd
       ansible.builtin.systemd:
         name: chronyd
