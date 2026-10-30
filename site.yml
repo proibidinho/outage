@@ -1,4 +1,12 @@
- ansible.builtin.shell: >-
+    - name: Gerar o certificado HTTPS do Kibana (certutil cert, PEM)
+      # sem --pass: o certutil recusa senha vazia em chave PEM. As linhas vazias respondem a um eventual prompt ("ENTER = sem senha").
+      ansible.builtin.shell: >-
         rm -f {{ ca_dir }}/kibana.zip &&
         printf '\n\n\n' | {{ es_bin }}/elasticsearch-certutil cert --pem --ca-cert {{ ca_dir }}/ca.crt --ca-key {{ ca_dir }}/ca.key
         --days 1825 --name kibana --out {{ ca_dir }}/kibana.zip
+        --dns {{ ([inventory_hostname, ansible_facts.fqdn, 'localhost'] + kibana_extra_dns) | unique | join(',') }}
+        --ip {{ ansible_host }},127.0.0.1
+        && unzip -oj {{ ca_dir }}/kibana.zip -d /etc/kibana/certs
+        && test -f /etc/kibana/certs/kibana.crt && test -f /etc/kibana/certs/kibana.key
+      args:
+        creates: /etc/kibana/certs/kibana.key
