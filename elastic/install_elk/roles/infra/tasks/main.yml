@@ -70,7 +70,7 @@
       register: sysctl_arquivo
 
     - name: Aplicar os parâmetros de kernel agora
-      ansible.builtin.command: sysctl -p /etc/sysctl.d/90-elasticsearch.conf
+      ansible.builtin.command: sysctl -p /etc/sysctl.d/elasticsearch.conf
       #when: sysctl_arquivo is changed
       changed_when: true
 

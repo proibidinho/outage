@@ -17,3 +17,11 @@
     enabled: true
   when: inventory_hostname in groups['kibana']
   listen: reiniciar servico
+
+# Fleet Server: certificado novo (renovacao) so vale depois de reiniciar o agente
+- name: reiniciar elastic-agent
+  ansible.builtin.systemd_service:
+    name: elastic-agent
+    state: restarted
+  when: inventory_hostname in groups['integration']
+  listen: reiniciar servico

@@ -10,7 +10,7 @@ server.ssl.enabled: true
 server.ssl.keystore.path: /etc/kibana/tls/kibana.p12
 
 # fala com os 8 nos hot, verificando o certificado (os IPs estao no SAN)
-elasticsearch.hosts: {{ groups['es_hot'] | map('extract', hostvars, 'ansible_host') | map('regex_replace', '^', 'https://') | map('regex_replace', '$', ':9200') | list | to_json }}
+elasticsearch.hosts: {{ es_hot_ips | map('regex_replace', '^', 'https://') | map('regex_replace', '$', ':9200') | list | to_json }}
 elasticsearch.username: kibana_system
 elasticsearch.ssl.certificateAuthorities: ["/etc/kibana/tls/http_ca.crt"]
 elasticsearch.ssl.verificationMode: full

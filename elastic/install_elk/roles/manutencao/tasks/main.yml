@@ -1,0 +1,455 @@
+---
+# ROLE manutencao: tarefas do cluster ja instalado, divididas em FASES (variavel "fase", passada pelo site.yml).
+#   no_identificar  (adicao)  le CPU, memoria e discos da VM (gather_facts), define nome, grupo e heap
+#   no_disco        (adicao)  discos vazios -> LVM + XFS em /var/lib/elasticsearch (pula se ja montado)
+#   no_certificado  (adicao)  emite os certificados do node com a CA atual (pula se ja emitidos)
+#   no_lembrete     (adicao)  lembrete do F5 e do inventory.yml
+#   no_remover      (remocao) tira os shards, para o servico, limpa a exclusao e lembra do F5
+#   cert_backup     (renovar_certificados) guarda os certificados atuais; o role instalacao reemite e distribui
+#   cert_validade   (validar, renovar_certificados) mostra a validade dos certificados instalados
+# Tudo idempotente: rodar de novo nao readiciona, nao reformata e nao remove de novo.
+
+# ---- FASE no_identificar: na VM da survey (pelo IP), com os fatos do gather_facts ----
+- name: FASE no_identificar
+  when: fase == 'no_identificar'
+  vars:
+    grupo: "{{ node_grupos[node_funcao] }}"
+    # IP ja cadastrado no inventory.yml = usa o nome e o heap de la; senao, o nome que a VM informa
+    nome_inventario: >-
+      {%- set achados = [] -%}
+      {%- for h in groups['elastic'] if hostvars[h].ansible_host | default('') == node_ip -%}{%- set _ = achados.append(h) -%}{%- endfor -%}
+      {{ achados | first | default('') }}
+    nome: "{{ nome_inventario if nome_inventario | length > 0 else (ansible_facts.fqdn if '.' in ansible_facts.fqdn else ansible_facts.hostname) }}"
+    # heap: 50% da RAM (ML 25% e Frozen 40%: o resto fica para o ML e para o cache de disco), no maximo 31g
+    fator: "{{ {'ML': 0.25, 'Frozen': 0.4}.get(node_funcao, 0.5) }}"
+    heap_calculado: "{{ [[(ansible_facts.memtotal_mb * fator | float / 1024) | int, 31] | min, 1] | max }}g"
+    heap: "{{ hostvars[nome_inventario].es_heap_size | default(heap_calculado) if nome_inventario | length > 0 else heap_calculado }}"
+    conflitos: "{{ groups['elastic'] | reject('eq', nome) | map('regex_replace', '[.].*$', '') | select('eq', nome.split('.')[0]) | list }}"
+  block:
+    - name: Recursos da VM lidos pelo gather_facts
+      ansible.builtin.debug:
+        msg:
+          nome: "{{ nome }}"
+          funcao: "{{ node_funcao }} (grupo {{ grupo }})"
+          cpu: "{{ ansible_facts.processor_vcpus }} vCPU"
+          memoria: "{{ (ansible_facts.memtotal_mb / 1024) | round(1) }} GB"
+          heap: "{{ heap if node_funcao != 'Integration' else 'nao se aplica (Fleet Server)' }}"
+          discos: >-
+            {%- set l = [] -%}
+            {%- for d, v in ansible_facts.devices.items() if d is match('^(sd|vd|xvd|nvme)') -%}{%- set _ = l.append(d ~ ' ' ~ v.size) -%}{%- endfor -%}
+            {{ l | sort }}
+
+    - name: Conferir nome e grupo do node
+      ansible.builtin.assert:
+        that:
+          - nome.split('.')[0] | length > 0
+          - nome.split('.')[0] != 'localhost'
+          - conflitos | length == 0
+          - nome_inventario | length == 0 or nome_inventario in groups[grupo]
+        fail_msg: >-
+          {{ node_ip }} ({{ nome }}): nome invalido, nome curto ja usado por outro servidor ({{ conflitos }})
+          ou o IP ja esta no inventory.yml em outro grupo (funcao escolhida: {{ node_funcao }}).
+        quiet: true
+
+    - name: Registrar o node no grupo da funcao (so nesta execucao; depois inclua no inventory.yml)
+      ansible.builtin.add_host:
+        name: "{{ nome }}"
+        groups: "{{ ['elastic', 'vm_novo', grupo] + ([] if node_funcao == 'Integration' else ['elasticsearch']) }}"
+        ansible_host: "{{ node_ip }}"
+        es_heap_size: "{{ heap }}"
+        ja_no_inventario: "{{ nome_inventario | length > 0 }}"
+      changed_when: false
+
+# ---- FASE no_disco: disco de dados do node novo (Integration nao tem; ja montado = nada a fazer) ----
+# Usa TODOS os discos vazios (inteiros, sem particao, sem volume, sem assinatura): vg00 e discos do sistema nunca entram.
+- name: FASE no_disco
+  when:
+    - fase == 'no_disco'
+    - node_funcao != 'Integration'
+    - "'/var/lib/elasticsearch' not in ansible_facts.mounts | map(attribute='mount') | list"
+  block:
+    - name: Ver se o VG vg_esdata ja existe (execucao anterior interrompida)
+      ansible.builtin.command: vgs vg_esdata
+      register: vg_existe
+      changed_when: false
+      failed_when: false
+
+    - name: Achar os discos vazios (somente leitura)
+      ansible.builtin.shell: |
+        for d in $(lsblk -dn -o NAME,TYPE | awk '$2=="disk"{print $1}'); do
+          [ "$(lsblk -n -o NAME /dev/$d | wc -l)" -eq 1 ] || continue      # tem particao ou volume: nao e vazio
+          blkid -p /dev/$d >/dev/null 2>&1; [ $? -eq 2 ] || continue       # tem assinatura: nao e vazio
+          path=$(for l in /dev/disk/by-path/*; do [ "$(readlink -f $l)" = "/dev/$d" ] && echo $l; done | grep -v -- '-part' | head -1)
+          [ -n "$path" ] && echo "$path"
+        done | sort
+      args:
+        executable: /bin/bash
+      register: vazios
+      changed_when: false
+      when: vg_existe.rc != 0
+
+    - name: Mostrar os discos que serao usados em /var/lib/elasticsearch
+      ansible.builtin.debug:
+        msg: "{{ vazios.stdout_lines | default('VG vg_esdata ja existe: so falta terminar o volume') }}"
+
+    - name: Parar se nao houver disco vazio
+      ansible.builtin.assert:
+        that: vazios.stdout_lines | length > 0
+        fail_msg: "{{ inventory_hostname }}: nenhum disco vazio para /var/lib/elasticsearch. Adicione um disco na VM e rode de novo."
+        quiet: true
+      when: vg_existe.rc != 0
+
+    - name: Garantir as ferramentas de LVM e XFS
+      ansible.builtin.dnf:
+        name: [lvm2, xfsprogs]
+        state: present
+
+    - name: Criar o VG vg_esdata com os discos vazios
+      community.general.lvg:
+        vg: vg_esdata
+        pvs: "{{ vazios.stdout_lines }}"
+        state: present
+      when: vg_existe.rc != 0
+
+    - name: Criar o LV lv_esdata ocupando 100% do VG
+      community.general.lvol:
+        vg: vg_esdata
+        lv: lv_esdata
+        size: 100%FREE
+        shrink: false
+
+    - name: Criar o filesystem XFS (nunca sobrescreve)
+      community.general.filesystem:
+        fstype: xfs
+        dev: /dev/vg_esdata/lv_esdata
+
+    - name: Criar o ponto de montagem
+      ansible.builtin.file:
+        path: /var/lib/elasticsearch
+        state: directory
+
+    - name: Gravar no /etc/fstab e montar
+      ansible.posix.mount:
+        path: /var/lib/elasticsearch
+        src: /dev/mapper/vg_esdata-lv_esdata
+        fstype: xfs
+        opts: defaults,noatime
+        state: mounted
+
+    - name: Corrigir o contexto SELinux
+      ansible.builtin.command: restorecon -R /var/lib/elasticsearch
+      changed_when: false
+      when: ansible_facts.selinux.status | default('disabled') == 'enabled'
+
+# ---- FASE no_certificado: emite so os certificados deste node, com a CA atual (ja emitidos = pula) ----
+# Mesmo layout do role instalacao: emitidos/<pacote>/<servidor>/<servidor>.p12|.crt|.key
+- name: FASE no_certificado
+  when: fase == 'no_certificado'
+  delegate_to: "{{ ca_host }}"
+  vars:
+    certutil: "{{ es_bin }}/elasticsearch-certutil"
+    curto: "{{ inventory_hostname.split('.')[0] }}"
+    dns_extra: "{{ ([fleet_public_name] if fleet_public_name | length > 0 else []) if node_funcao == 'Integration' else [es_public_name] }}"
+    emissoes: >-
+      {{ [{'nome': 'fleet_http', 'ca': 'http', 'pem': true}] if node_funcao == 'Integration' else
+         [{'nome': 'es_transport', 'ca': 'transport', 'pem': false}, {'nome': 'es_http', 'ca': 'http', 'pem': false}] }}
+  block:
+    - name: Instancia deste node (instances.yml do certutil)
+      ansible.builtin.copy:
+        dest: "{{ ca_dir }}/instancias_novo_{{ curto }}.yml"
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          instances:
+            - name: "{{ curto }}"
+              dns: {{ ([inventory_hostname, curto, 'localhost'] + dns_extra) | unique | to_json }}
+              ip: {{ [ansible_host, '127.0.0.1'] | to_json }}
+
+    - name: Emitir os certificados deste node (validade 3 anos)
+      vars:
+        base:
+          - "{{ certutil }}"
+          - cert
+          - --silent
+          - --days
+          - "1095"
+          - --ca-cert
+          - "{{ ca_dir }}/ca_{{ item.ca }}/ca/ca.crt"
+          - --ca-key
+          - "{{ ca_dir }}/ca_{{ item.ca }}/ca/ca.key"
+          - --ca-pass
+          - "{{ tls_ca_password }}"
+          - --in
+          - "{{ ca_dir }}/instancias_novo_{{ curto }}.yml"
+          - --out
+          - "{{ ca_dir }}/novo_{{ curto }}_{{ item.nome }}.zip"
+        formato: "{{ ['--pem'] if item.pem else ['--pass', tls_p12_password] }}"
+      ansible.builtin.command:
+        argv: "{{ base + formato }}"
+        creates: "{{ ca_dir }}/novo_{{ curto }}_{{ item.nome }}.zip"
+      loop: "{{ emissoes }}"
+      loop_control:
+        label: "{{ item.nome }}"
+      register: emissao_novo
+      failed_when: false          # o erro do certutil aparece na conferencia abaixo (no_log esconderia)
+      no_log: true
+
+    - name: Conferir que o certutil emitiu (se falhou, mostra o erro dele)
+      ansible.builtin.assert:
+        that: item.rc | default(0) == 0
+        fail_msg: "certutil cert ({{ item.item.nome }}) falhou: {{ item.stderr | default('') }} {{ item.stdout | default('') }}"
+      loop: "{{ emissao_novo.results }}"
+      loop_control:
+        label: "{{ item.item.nome }}"
+
+    - name: Pasta de cada pacote de certificados
+      ansible.builtin.file:
+        path: "{{ ca_dir }}/emitidos/{{ item.nome }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      loop: "{{ emissoes }}"
+      loop_control:
+        label: "{{ item.nome }}"
+
+    - name: Extrair para emitidos/<pacote>/{{ curto }}/
+      ansible.builtin.command:
+        cmd: "unzip -oq {{ ca_dir }}/novo_{{ curto }}_{{ item.nome }}.zip -d {{ ca_dir }}/emitidos/{{ item.nome }}"
+        creates: "{{ ca_dir }}/emitidos/{{ item.nome }}/{{ curto }}"
+      loop: "{{ emissoes }}"
+      loop_control:
+        label: "{{ item.nome }}"
+
+# ---- FASE no_lembrete: o que o analista faz a mao depois da adicao ----
+- name: FASE no_lembrete
+  when: fase == 'no_lembrete'
+  vars:
+    heap_inventario: "{{ '' if node_funcao == 'Integration' else ', es_heap_size: ' ~ es_heap_size }}"
+  ansible.builtin.debug:
+    msg:
+      - "NODE ADICIONADO: {{ inventory_hostname }} ({{ ansible_host }}) como {{ node_funcao }}."
+      - >-
+        {{ 'F5: INCLUIR ' ~ ansible_host ~ ' porta 9200 no pool do VIP ' ~ es_public_name ~ ' (' ~ f5_vips[es_public_name] | default('?') ~ ').'
+           if node_funcao == 'Hot' else
+           ('F5: INCLUIR ' ~ ansible_host ~ ' porta ' ~ fleet_port ~ ' no pool do VIP ' ~ fleet_public_name ~ ' (' ~ f5_vips[fleet_public_name] | default('?') ~ ').'
+            if node_funcao == 'Integration' else
+            'F5: nada a fazer (nodes ' ~ node_funcao ~ ' nao ficam atras do F5).') }}
+      - "{{ 'KIBANA/FLEET: ja usam a lista nova de Hot (Kibanas reiniciados um por vez).' if node_funcao == 'Hot' else 'KIBANA/FLEET: nada a fazer.' }}"
+      - >-
+        {{ 'INVENTARIO: ' ~ inventory_hostname ~ ' ja esta no inventory.yml: nada a fazer.' if ja_no_inventario | default(false) | bool else
+           'INVENTARIO: ADICIONE no inventory.yml, grupo ' ~ node_grupos[node_funcao] ~ ', a linha:   '
+           ~ inventory_hostname ~ ': {ansible_host: ' ~ ansible_host ~ heap_inventario ~ '}' }}
+
+# ---- FASE no_remover: no 1o master (API do cluster). Ja fora do cluster = so confere e limpa ----
+- name: FASE no_remover
+  when: fase == 'no_remover'
+  module_defaults:
+    ansible.builtin.uri:
+      url_username: elastic
+      url_password: "{{ es_elastic_password }}"
+      force_basic_auth: true
+      ca_path: "{{ es_tls_dir }}/http_ca.crt"
+      return_content: true
+      body_format: json
+  block:
+    - name: Elasticsearch - tirar os shards do node (exclusao de alocacao)
+      when: node_funcao != 'Integration'
+      block:
+        - name: Ler os nodes do cluster
+          ansible.builtin.uri:
+            url: "{{ es_api_url }}/_nodes?filter_path=nodes.*.name,nodes.*.ip,nodes.*.roles"
+          register: nos
+          changed_when: false
+
+        - name: Ler a exclusao de alocacao atual
+          ansible.builtin.uri:
+            url: "{{ es_api_url }}/_cluster/settings?flat_settings=true"
+          register: cfg
+          changed_when: false
+
+        - name: Identificar o node pelo IP
+          vars:
+            achado: "{{ nos.json.nodes.values() | selectattr('ip', 'eq', node_ip) | list }}"
+          ansible.builtin.set_fact:
+            no_nome: "{{ (achado | map(attribute='name') | list + [''])[0] }}"
+            no_papeis: "{{ (achado | map(attribute='roles') | list + [[]])[0] }}"
+            nomes_no_cluster: "{{ nos.json.nodes.values() | map(attribute='name') | list }}"
+            exclusao_atual: "{{ cfg.json.persistent['cluster.routing.allocation.exclude._name'] | default('') }}"
+
+        - name: Mostrar o que sera feito
+          ansible.builtin.debug:
+            msg: "{{ ('Node ' ~ no_nome ~ ' (' ~ node_ip ~ ') sera esvaziado e removido.') if no_nome | length > 0
+                     else ('Nenhum node com IP ' ~ node_ip ~ ' no cluster (ja removido): so confere o servico e a exclusao.') }}"
+
+        - name: Conferir (nunca remove master; nao sobrescreve exclusao de outro node ainda no cluster)
+          ansible.builtin.assert:
+            that:
+              - "'master' not in no_papeis"
+              - exclusao_atual in ['', no_nome] or exclusao_atual not in nomes_no_cluster
+            fail_msg: >-
+              {{ node_ip }}: e master ({{ no_papeis }}) ou ja existe exclusao de alocacao para outro node no cluster
+              ({{ exclusao_atual }}). Trate manualmente antes de remover.
+            quiet: true
+
+        - name: Esvaziar o node (somente se ele ainda esta no cluster)
+          when: no_nome | length > 0
+          block:
+            - name: Cluster nao pode estar red
+              ansible.builtin.uri:
+                url: "{{ es_api_url }}/_cluster/health"
+              register: saude
+              changed_when: false
+              failed_when: saude.json.status == 'red'
+
+            - name: Excluir o node da alocacao (os shards migram para os outros)
+              ansible.builtin.uri:
+                url: "{{ es_api_url }}/_cluster/settings"
+                method: PUT
+                body:
+                  persistent:
+                    cluster.routing.allocation.exclude._name: "{{ no_nome }}"
+              when: exclusao_atual != no_nome
+              changed_when: true
+
+            - name: Esperar o node ficar sem shards (pode levar horas; ate 6h)
+              ansible.builtin.uri:
+                url: "{{ es_api_url }}/_cat/allocation/{{ no_nome }}?h=shards&format=json"
+              register: aloc
+              until: aloc.json | map(attribute='shards') | map('int') | sum == 0
+              retries: 720
+              delay: 30
+              changed_when: false
+
+    - name: Parar e desabilitar o servico na VM (o pacote e os dados continuam la)
+      ansible.builtin.systemd_service:
+        name: "{{ 'elastic-agent' if node_funcao == 'Integration' else 'elasticsearch' }}"
+        state: stopped
+        enabled: false
+      delegate_to: "{{ node_ip or inventory_hostname }}"   # o "or" so evita erro nas outras fases (node_ip vazio)
+      ignore_unreachable: true
+
+    - name: Elasticsearch - confirmar a saida e limpar a exclusao
+      when: node_funcao != 'Integration'
+      block:
+        - name: Esperar o node sair da lista de nodes do cluster
+          ansible.builtin.uri:
+            url: "{{ es_api_url }}/_nodes?filter_path=nodes.*.name,nodes.*.ip"
+          register: nos_depois
+          until: node_ip not in (nos_depois.json.nodes | default({})).values() | map(attribute='ip') | list
+          retries: 30
+          delay: 10
+          changed_when: false
+
+        - name: Ler a exclusao de alocacao de novo
+          ansible.builtin.uri:
+            url: "{{ es_api_url }}/_cluster/settings?flat_settings=true"
+          register: cfg_depois
+          changed_when: false
+
+        - name: Limpar a exclusao (somente se aponta para um node que ja saiu)
+          vars:
+            exclusao: "{{ cfg_depois.json.persistent['cluster.routing.allocation.exclude._name'] | default('') }}"
+            restantes: "{{ (nos_depois.json.nodes | default({})).values() | map(attribute='name') | list }}"
+          ansible.builtin.uri:
+            url: "{{ es_api_url }}/_cluster/settings"
+            method: PUT
+            body:
+              persistent:
+                cluster.routing.allocation.exclude._name: null
+          when: exclusao | length > 0 and exclusao not in restantes
+          changed_when: true
+
+    - name: Lembrete do que o analista faz a mao
+      vars:
+        nome_inventario: >-
+          {%- set achados = [] -%}
+          {%- for h in groups['elastic'] if hostvars[h].ansible_host | default('') == node_ip -%}{%- set _ = achados.append(h) -%}{%- endfor -%}
+          {{ achados | first | default('') }}
+      ansible.builtin.debug:
+        msg:
+          - "NODE REMOVIDO: {{ node_ip }} ({{ node_funcao }}). Servico parado e desabilitado; pacote e dados ficaram na VM."
+          - >-
+            {{ 'F5: REMOVER ' ~ node_ip ~ ' porta 9200 do pool do VIP ' ~ es_public_name ~ ' (' ~ f5_vips[es_public_name] | default('?') ~ ').'
+               if node_funcao == 'Hot' else
+               ('F5: REMOVER ' ~ node_ip ~ ' porta ' ~ fleet_port ~ ' do pool do VIP ' ~ fleet_public_name ~ ' (' ~ f5_vips[fleet_public_name] | default('?') ~ '). '
+                ~ 'FLEET: no Kibana > Fleet > Agents, remova (unenroll) o agente desta VM.'
+                if node_funcao == 'Integration' else
+                'F5: nada a fazer (nodes ' ~ node_funcao ~ ' nao ficam atras do F5).') }}
+          - "{{ 'KIBANA/FLEET: os proximos plays tiram ' ~ node_ip ~ ' da lista de Hot (Kibanas reiniciados um por vez).' if node_funcao == 'Hot' else 'KIBANA/FLEET: nada a fazer.' }}"
+          - >-
+            {{ ('INVENTARIO: REMOVA do inventory.yml, grupo ' ~ node_grupos[node_funcao] ~ ', a linha que comeca com:   '
+                ~ nome_inventario ~ ': {ansible_host: ' ~ node_ip ~ ' ...'
+                ~ ' (senao a proxima instalar religa o servico)')
+               if nome_inventario | length > 0 else
+               'INVENTARIO: ' ~ node_ip ~ ' nao esta no inventory.yml: nada a fazer.' }}
+
+# ---- FASE cert_backup: no servidor da CA. Guarda os certificados atuais e libera a reemissao (1 vez por dia) ----
+- name: FASE cert_backup
+  when: fase == 'cert_backup'
+  block:
+    - name: As CAs continuam validas por mais 3 anos? (os certificados novos valem 3 anos)
+      ansible.builtin.command: "openssl x509 -checkend 94608000 -noout -in {{ ca_dir }}/ca_{{ item }}/ca/ca.crt"
+      loop: [transport, http]
+      register: ca_ok
+      changed_when: false
+      failed_when: false
+
+    - name: Parar se alguma CA vence antes dos certificados novos
+      ansible.builtin.assert:
+        that: ca_ok.results | map(attribute='rc') | select('ne', 0) | list | length == 0
+        fail_msg: "Uma das CAs ({{ ca_ok.results | rejectattr('rc', 'eq', 0) | map(attribute='item') | list }}) vence em menos de 3 anos. Veja a documentacao (renovacao da CA)."
+        quiet: true
+
+    - name: Mover os certificados emitidos para backup_certificados_<data> (ja feito hoje = nada a fazer)
+      ansible.builtin.shell: |
+        set -eu
+        cd {{ ca_dir }}
+        B=backup_certificados_$(date +%Y%m%d)
+        if [ -d "$B" ]; then echo "JA_FEITO $B"; exit 0; fi
+        mkdir -m 0700 "$B"
+        for f in es_transport.zip es_http.zip kibana_http.zip fleet_http.zip novo_*.zip emitidos instancias_*.yml; do
+          if [ -e "$f" ]; then mv "$f" "$B"/; fi
+        done
+        echo "FEITO $B"
+      args:
+        executable: /bin/bash
+      register: backup
+      changed_when: "'FEITO' in backup.stdout and 'JA_FEITO' not in backup.stdout"
+
+    - name: Mostrar o backup
+      ansible.builtin.debug:
+        msg: "{{ backup.stdout | replace('JA_FEITO ', 'Backup de hoje ja existia (reexecucao): ') | replace('FEITO ', 'Backup criado: ') }} em {{ ca_dir }}. A seguir: reemissao e reinicio UM servidor por vez."
+
+# ---- FASE cert_validade: cada servidor mostra a data de expiracao dos seus certificados (somente leitura) ----
+- name: FASE cert_validade
+  when: fase == 'cert_validade'
+  vars:
+    arquivos: >-
+      {{ [es_tls_dir ~ '/http.p12', es_tls_dir ~ '/transport.p12'] if inventory_hostname in groups['elasticsearch'] else
+         (['/etc/kibana/tls/kibana.p12'] if inventory_hostname in groups['kibana'] else ['/etc/fleet-server-tls/fleet.crt']) }}
+  block:
+    - name: Ler a data de expiracao
+      ansible.builtin.shell: |
+        for f in {{ arquivos | join(' ') }}; do
+          case "$f" in
+            *.p12) fim=$( (openssl pkcs12 -in "$f" -nokeys -clcerts -passin env:P12 2>/dev/null \
+                           || openssl pkcs12 -legacy -in "$f" -nokeys -clcerts -passin env:P12 2>/dev/null) \
+                         | openssl x509 -noout -enddate 2>/dev/null) ;;
+            *)     fim=$(openssl x509 -in "$f" -noout -enddate 2>/dev/null) ;;
+          esac
+          echo "$f vence em: ${fim#notAfter=}"
+        done
+      args:
+        executable: /bin/bash
+      environment:
+        P12: "{{ tls_p12_password }}"
+      register: validade
+      changed_when: false
+      check_mode: false
+      no_log: true
+
+    - name: Mostrar a validade
+      ansible.builtin.debug:
+        msg: "{{ validade.stdout_lines }}"

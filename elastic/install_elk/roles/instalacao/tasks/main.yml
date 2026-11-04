@@ -571,7 +571,7 @@
     fleet_urls: >-
       {{ ['https://' ~ fleet_public_name ~ ':' ~ fleet_port] if fleet_public_name | length > 0
          else groups['integration'] | map('extract', hostvars, 'ansible_host') | map('regex_replace', '^', 'https://') | map('regex_replace', '$', ':' ~ fleet_port) | list }}
-    es_urls: "{{ groups['es_hot'] | map('extract', hostvars, 'ansible_host') | map('regex_replace', '^', 'https://') | map('regex_replace', '$', ':9200') | list }}"
+    es_urls: "{{ es_hot_ips | map('regex_replace', '^', 'https://') | map('regex_replace', '$', ':9200') | list }}"
   module_defaults:
     ansible.builtin.uri:
       url_username: elastic
@@ -745,6 +745,9 @@
           loop:
             - "/root/{{ pacote_agente }}"
             - "/root/{{ pacote_agente }}.tar.gz"
+
+    - name: Aplicar agora os reinícios pendentes (certificado novo = reinicia o agente)
+      ansible.builtin.meta: flush_handlers
 
     - name: Esperar o Fleet Server responder na porta do Fleet
       ansible.builtin.uri:
