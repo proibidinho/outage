@@ -5,9 +5,9 @@
 acao: precheck
 componentes: [elasticsearch, kibana, fleet]      # o que "instalar" executa (tire um para pular)
 
-ntp_server: 10.29.4.200
 elastic_version: "9.5.5"
 es_cluster_name: elasticsearch_corp              # NAO pode mudar depois do bootstrap
+ntp_server: 10.29.4.200                          # servidor NTP da empresa (o infra grava no chrony)
 
 # Acesso: exec node -> servidores como root. Se o exec node NAO alcanca os servidores direto, informe o bastion
 # (o SSH atravessa ele, como tunel). Vazio = conexao direta.
@@ -32,7 +32,7 @@ fleet_port: 8220
 fleet_public_name: "fleet.claro.com.br"
 
 # ------------------------------------------------------------ pacotes
-elastic_repo_proxy: "http://10.29.177.37:8080"                   # ex.: http://proxy:3128 (vazio = internet direta)
+elastic_repo_proxy: "http://10.29.177.37:8080"   # proxy para artifacts.elastic.co e epr.elastic.co (vazio = internet direta)
 
 # ------------------------------------------------------------ seguranca do bootstrap
 # Cluster NOVO so e formado com:  -e es_bootstrap_allowed=true  (somente na primeira vez)

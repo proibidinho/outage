@@ -133,7 +133,17 @@
           - "{{ ca_dir }}/ca_{{ item }}.zip"
         creates: "{{ ca_dir }}/ca_{{ item }}.zip"
       loop: [transport, http]
+      register: cas_certutil
+      failed_when: false          # o erro do certutil aparece na conferencia abaixo (no_log esconderia)
       no_log: true
+
+    - name: Conferir que o certutil criou as CAs (se falhou, mostra o erro dele)
+      ansible.builtin.assert:
+        that: item.rc | default(0) == 0
+        fail_msg: "certutil ca ({{ item.item }}) falhou: {{ item.stderr | default('') }} {{ item.stdout | default('') }}"
+      loop: "{{ cas_certutil.results }}"
+      loop_control:
+        label: "{{ item.item }}"
 
     - name: "Extrair as CAs (arquivos ca_http/ca/ca.crt e ca_http/ca/ca.key)"
       ansible.builtin.command:
@@ -184,7 +194,25 @@
       loop: "{{ emissoes }}"
       loop_control:
         label: "{{ item.nome }}"
+      register: emissao_certutil
+      failed_when: false          # o erro do certutil aparece na conferencia abaixo (no_log esconderia)
       no_log: true
+
+    - name: Conferir que o certutil emitiu os certificados (se falhou, mostra o erro dele)
+      ansible.builtin.assert:
+        that: item.rc | default(0) == 0
+        fail_msg: "certutil cert ({{ item.item.nome }}) falhou: {{ item.stderr | default('') }} {{ item.stdout | default('') }}"
+      loop: "{{ emissao_certutil.results }}"
+      loop_control:
+        label: "{{ item.item.nome }}"
+
+    - name: Pasta dos certificados emitidos (o unzip -d não cria pastas intermediárias)
+      ansible.builtin.file:
+        path: "{{ ca_dir }}/emitidos"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
 
     - name: "Extrair os certificados (arquivos emitidos/<pacote>/<servidor>/<servidor>.p12|.crt|.key)"
       ansible.builtin.command:
@@ -193,6 +221,23 @@
       loop: "{{ emissoes }}"
       loop_control:
         label: "{{ item.nome }}"
+
+    - name: Conferir que todos os arquivos esperados existem (CA, certificado e chave de cada servidor)
+      # falha aqui, listando o que faltou e o que existe, e nao la na copia para os servidores
+      vars:
+        esperados: >-
+          ca_transport/ca/ca.crt ca_transport/ca/ca.key ca_http/ca/ca.crt ca_http/ca/ca.key
+          {% for h in groups['elasticsearch'] %}{% set c = h.split('.')[0] %}emitidos/es_transport/{{ c }}/{{ c }}.p12 emitidos/es_http/{{ c }}/{{ c }}.p12 {% endfor %}
+          {% for h in groups['kibana'] %}{% set c = h.split('.')[0] %}emitidos/kibana_http/{{ c }}/{{ c }}.p12 {% endfor %}
+          {% for h in groups['integration'] %}{% set c = h.split('.')[0] %}emitidos/fleet_http/{{ c }}/{{ c }}.crt emitidos/fleet_http/{{ c }}/{{ c }}.key {% endfor %}
+      ansible.builtin.shell: |
+        cd {{ ca_dir }}
+        falta=0
+        for f in {{ esperados }}; do [ -f "$f" ] || { echo "FALTA $f"; falta=1; }; done
+        if [ "$falta" = 1 ]; then echo "--- o que existe em {{ ca_dir }} ---"; find . -maxdepth 4 -type f | sort | head -80; fi
+      register: conferencia_cert
+      changed_when: false
+      failed_when: "'FALTA' in conferencia_cert.stdout"
 
 - name: CERTIFICADOS - PARTE 2 (copiar os arquivos deste servidor)
   when: fase in ['es_nos', 'kibana', 'fleet_servers']
@@ -368,7 +413,8 @@
       return_content: true
   block:
     - name: Ler o identificador (uuid) do cluster recém-formado
-      when: cluster_novo | default(false) | bool
+      #when: cluster_novo | default(false) | bool
+      when: hostvars[groups['es_master'][0]].cluster_novo| default(false) | bool
       delegate_to: "{{ es_api_host }}"
       run_once: true
       ansible.builtin.uri:
