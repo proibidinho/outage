@@ -1,0 +1,53 @@
+---
+# Relatório HTML de atualização/criação de certificados.
+# O e-mail é enviado tanto em execução real quanto em simulação.
+
+- name: Consolidar os resultados de certificados
+  ansible.builtin.set_fact:
+    relatorio_certificados: "{{ (resultado_atualizacao | default([])) + (resultado_criacao | default([])) + (resultado_remocao | default([]))}}"
+
+- name: Informar que não há certificados processados
+  ansible.builtin.debug:
+    msg: "Nenhum certificado foi processado; não há resultados para enviar."
+  when: relatorio_certificados | length == 0
+
+- name: Enviar relatório HTML de certificados
+  community.general.mail:
+    host: vip_smtp.claro.com.br
+    port: 25
+    from: coeeaiops@claro.com.br
+    to: "{{ email }}"
+    subject: >-
+      Relatório Certificados Zabbix - {{ ansible_date_time.date
+      }}{{ ' (SIMULAÇÃO)' if not zabbix_aplicar_alteracoes | bool else '' }}
+    subtype: html
+    body: "{{ lookup('template', 'corpo_email.html.j2') }}"
+  when: relatorio_certificados | length > 0
+
+# Exibe no output do job quais certificados foram tratados ou seriam
+# alterados/criados/removidos. Em simulação, os status SIMULADO indicam que nada
+# foi gravado no Zabbix, mas o plano e o e-mail são gerados normalmente.
+- name: OUTPUT | Certificados processados, alterados, a criar ou a remover
+  ansible.builtin.debug:
+    msg:
+      modo: "{{ 'APLICAÇÃO REAL' if zabbix_aplicar_alteracoes | bool else 'SIMULAÇÃO - nenhuma alteração gravada' }}"
+      operacao: "{{ item.operacao }}"
+      ticket: "{{ item.ticket }}"
+      host: "{{ item.host }}"
+      tipo: "{{ item.tipo }}"
+      validade_anterior: "{{ item.validade_anterior | default('') }}"
+      validade_solicitada: "{{ item.validade_solicitada | default('') }}"
+      status: "{{ item.status }}"
+      mensagem: "{{ item.mensagem | default('') }}"
+  loop: "{{ relatorio_certificados }}"
+  loop_control:
+    label: "{{ item.operacao }} {{ item.host }} ({{ item.tipo }})"
+
+# O e-mail é enviado antes de falhar o job, para que os resultados
+# também cheguem ao destinatário quando uma operação terminar em ERRO.
+- name: Falhar o job se alguma operação terminou em ERRO
+  ansible.builtin.fail:
+    msg: >-
+      {{ relatorio_certificados | selectattr('status', 'equalto', 'ERRO') | list | length }}
+      operação(ões) terminaram em ERRO. Veja o relatório enviado para {{ email }}.
+  when: relatorio_certificados | selectattr('status', 'equalto', 'ERRO') | list | length > 0

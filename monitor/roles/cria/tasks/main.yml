@@ -189,14 +189,7 @@
          | selectattr('key', 'in', cria_campos_modelo)
          | rejectattr('value', 'in', ['', []])
          | items2dict }}
-    # description = a do modelo + "Chamado Jira: <ticket>" (nova linha).
-    # Só é avaliada quando PENDENTE (o modelo existe nesse caso).
-    descricao_modelo: "{{ modelo.item.description | default('') | string | trim }}"
-    # quebra de linha real (YAML entre aspas duplas converte "\n" antes do Jinja)
-    quebra_linha: "\n"
-    descricao_ticket: >-
-      {{ descricao_modelo if ('Chamado Jira: ' ~ item.ticket) in descricao_modelo
-         else (descricao_modelo ~ (quebra_linha if descricao_modelo | length > 0 else '') ~ 'Chamado Jira: ' ~ item.ticket) }}
+    descricao_ticket: "Chamado Jira: {{ item.ticket}}"
     payload: >-
       {{ ({'hostid': zbx_hostid, 'name': nome, 'key_': chave} | combine(campos_modelo) | combine({'description': descricao_ticket})) if status == 'PENDENTE' else {} }}
   loop: "{{ certificados_para_criar }}"
@@ -301,7 +294,7 @@
 #      senão a role relatorios não roda e o e-mail não é enviado. A falha
 #      é refletida no resultado no passo 7.
 # ------------------------------------------------------------
-- name: Criar triggers para certificados recém-criados
+- name: Criar triggers de expiracao
   community.zabbix.zabbix_trigger:
     name: "Certificado {{ item.tipo }} {{ item.host | regex_replace('^star\\.', '*.') }} expirado"
     host_name: "{{ zabbix_host_certificados }}"
@@ -313,12 +306,10 @@
       expression: 'find(/{{ zabbix_host_certificados }}/{{ item.key_ }},#1,"like","expirado")<>0'
       recovery_mode: recovery_expression
       recovery_expression: 'find(/{{ zabbix_host_certificados }}/{{ item.key_ }},#1,"like","OK")<>0'
-      # confirme a severidade desejada: not_classified | information |
-      # warning | average | high | disaster
-      severity: average
+      severity: high
       correlation_mode: all
       generate_multiple_events: false
-      manual_close: false
+      manual_close: yes
       enabled: true
       tags:
         - tag: impacto
@@ -334,17 +325,50 @@
   when: zabbix_aplicar_alteracoes | bool
   ignore_errors: true
 
-- name: Exibir resultado da criação dos triggers
-  ansible.builtin.debug:
-    msg:
-      certificado: "{{ item.item.host }} ({{ item.item.tipo }})"
-      trigger: "Certificado {{ item.item.tipo }} {{ item.item.host | regex_replace('^star\\.', '*.') }} expirado"
-      resultado: "{{ 'OK' if not (item.failed | default(false)) else 'ERRO' }}"
-      mensagem: "{{ item.msg | default('Trigger criada/atualizada.') }}"
-  loop: "{{ zbx_trigger_create.results | default([]) }}"
+- name: Criar triggers de pre-expiracao
+  community.zabbix.zabbix_trigger:
+    name: "Certificado {{ item.tipo }} {{ item.host | regex_replace('^star\\.', '*.') }} próximo de expirar"
+    host_name: "{{ zabbix_host_certificados }}"
+    desc: |-
+      Verifica status do certificado.
+      Gera alarme quando estiver para expirar em 45 dias
+    params:
+      event_name: "Certificado {{ item.tipo }} {{ item.host | regex_replace('^star\\.', '*.') }} proximo de expirar"
+      expression: 'find(/{{ zabbix_host_certificados }}/{{ item.key_ }},#1,"like","irá expirar em")<>0'
+      recovery_mode: recovery_expression
+      recovery_expression: 'find(/{{ zabbix_host_certificados }}/{{ item.key_ }},#1,"like","OK")<>0'
+      # confirme a severidade desejada: not_classified | information |
+      # warning | average | high | disaster
+      severity: average
+      correlation_mode: all
+      generate_multiple_events: false
+      manual_close: yes
+      enabled: true
+      tags:
+        - tag: impacto
+          value: SERVICO
+        - tag: solucionador
+          value: '{$SOLUCIONADOR_GA_CERTIFICADOS}'
+    state: present
+  delegate_to: "{{ zabbix_inventory_host }}"
+  loop: "{{ resultado_criacao | selectattr('status', 'equalto', 'CRIADO') | list }}"
   loop_control:
-    label: "{{ item.item.host | default('trigger') }}"
+    label: "{{ item.host }} ({{ item.tipo }})"
+  register: zbx_trigger_create
   when: zabbix_aplicar_alteracoes | bool
+  ignore_errors: true
+
+# - name: Exibir resultado da criação dos triggers
+#   ansible.builtin.debug:
+#     msg:
+#       certificado: "{{ item.item.host }} ({{ item.item.tipo }})"
+#       trigger: "Certificado {{ item.item.tipo }} {{ item.item.host | regex_replace('^star\\.', '*.') }} expirado"
+#       resultado: "{{ 'OK' if not (item.failed | default(false)) else 'ERRO' }}"
+#       mensagem: "{{ item.msg | default('Trigger criada/atualizada.') }}"
+#   loop: "{{ zbx_trigger_create.results | default([]) }}"
+#   loop_control:
+#     label: "{{ item.item.host | default('trigger') }}"
+#   when: zabbix_aplicar_alteracoes | bool
 
 # ------------------------------------------------------------
 # 7. Refletir falhas de trigger no resultado do relatório. Item criado

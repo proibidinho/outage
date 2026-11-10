@@ -1,0 +1,38 @@
+---
+# Cria em memória o host usado pelo connection plugin da
+# community.zabbix. Nada é executado no Zabbix aqui.
+#
+# Se zabbix_habilitado for false, esta role não faz nada e o
+# playbook segue normalmente (o Dynatrace nunca depende disso).
+
+- name: Avisar que o Zabbix está desabilitado
+  ansible.builtin.debug:
+    msg: >-
+      zabbix_habilitado=false: o host virtual não será criado e
+      a role "outage" vai pular as tasks do Zabbix.
+  when: not zabbix_habilitado
+
+- name: Validar configuração de acesso ao Zabbix
+  ansible.builtin.assert:
+    that:
+      - zabbix_host | length > 0
+      - zabbix_api_token | length > 0
+    fail_msg: >-
+      Configure zabbix_host e use o token
+      antes de executar o playbook (ou defina
+      zabbix_habilitado: false para pular o Zabbix).
+  when: zabbix_habilitado
+
+- name: Registrar host virtual para a API do Zabbix
+  ansible.builtin.add_host:
+    name: "{{ zabbix_inventory_host }}"
+    ansible_host: "{{ zabbix_host }}"
+    ansible_connection: httpapi
+    ansible_network_os: community.zabbix.zabbix
+    ansible_httpapi_port: "{{ zabbix_port }}"
+    ansible_httpapi_use_ssl: "{{ zabbix_use_ssl }}"
+    ansible_httpapi_validate_certs: "{{ zabbix_validate_certs }}"
+    ansible_zabbix_url_path: "{{ zabbix_url_path }}"
+    ansible_zabbix_auth_key: "{{ zabbix_api_token }}"
+  changed_when: false
+  when: zabbix_habilitado

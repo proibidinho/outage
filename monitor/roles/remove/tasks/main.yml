@@ -1,0 +1,214 @@
+---
+# ============================================================
+# Role remove: desabilita itens de certificado já cadastrados
+# no host CERTIFICADOS_CLARO_BRASIL.
+#
+# Entrada:
+#   certificados_para_remover
+#
+# Saída:
+#   resultado_remocao
+#
+# Status possíveis:
+#
+#   REMOVIDO
+#   SIMULADO
+#   JA_REMOVIDO
+#   NAO_ENCONTRADO
+#   AMBIGUO
+#   TIPO_INVALIDO
+#   ERRO
+#
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Buscar itens do Zabbix
+# ------------------------------------------------------------
+
+- name: Buscar itens de certificado no Zabbix
+  ansible.builtin.uri:
+    url: "{{ zabbix_api_url }}"
+    method: POST
+    body_format: json
+    headers:
+      Content-Type: application/json-rpc
+    body:
+      jsonrpc: "2.0"
+      method: "item.get"
+      params:
+        host: "{{ zabbix_host_certificados }}"
+        search:
+          key_: "{{ zabbix_chave_certificado }}"
+        output:
+          - itemid
+          - name
+          - key_
+          - status
+      auth: "{{ zabbix_api_token }}"
+      id: 1
+    validate_certs: "{{ zabbix_validate_certs }}"
+  delegate_to: localhost
+  register: zbx_itens
+  failed_when: >-
+    zbx_itens.json is not defined
+    or zbx_itens.json.error is defined
+    or zbx_itens.json.result is not defined
+
+# ------------------------------------------------------------
+# 2. Interpretar itens
+# ------------------------------------------------------------
+
+- name: Interpretar a key dos itens existentes
+  ansible.builtin.set_fact:
+    zbx_certs: >-
+      {%- set r = namespace(lista=[]) -%}
+      {%- for i in zbx_itens.json.result -%}
+      {%- set p = i.key_ | regex_findall(zabbix_chave_regex) -%}
+      {%- if p -%}
+      {%- set r.lista = r.lista + [{
+          'itemid': i.itemid,
+          'name': i.name,
+          'key_': i.key_,
+          'status': i.status | string,
+          'host': p[0][0] | lower,
+          'tipo': p[0][1] | lower
+      }] -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ r.lista }}
+
+# ------------------------------------------------------------
+# 3. Planejamento
+# ------------------------------------------------------------
+
+- name: Planejar remoções (somente leitura)
+  ansible.builtin.debug:
+    msg:
+      operacao: "REMOCAO"
+      ticket: "{{ item.ticket }}"
+      host: "{{ item.host }}"
+      tipo: "{{ item.tipo }}"
+      itemid: "{{ encontrados[0].itemid if encontrados | length == 1 else '' }}"
+      status: "{{ status }}"
+      mensagem: "{{ mensagem }}"
+  vars:
+    candidatos: >-
+      {{
+        zbx_certs
+        | selectattr('host', 'equalto', item.host | lower)
+        | selectattr('tipo', 'equalto', item.tipo | lower)
+        | list
+      }}
+
+    encontrados: >-
+      {{
+        candidatos
+        if candidatos | length <= 1
+        else candidatos | selectattr('status', 'equalto', '0') | list
+      }}
+
+    status: >-
+      {{ 'TIPO_INVALIDO' if (item.tipo | lower) not in ['externo', 'interno']
+         else 'NAO_ENCONTRADO' if candidatos | length == 0
+         else 'AMBIGUO' if encontrados | length != 1
+         else 'JA_REMOVIDO' if encontrados[0].status == '1'
+         else 'PENDENTE' }}
+
+    mensagem: >-
+      {{ 'Tipo não identificado na descrição do chamado (esperado Externo ou Interno).' if status == 'TIPO_INVALIDO'
+         else 'Nenhum item encontrado no Zabbix para este host e tipo.' if status == 'NAO_ENCONTRADO'
+         else 'Mais de um item corresponde e não há exatamente um Enabled.' if status == 'AMBIGUO'
+         else 'O item já está desabilitado.' if status == 'JA_REMOVIDO'
+         else 'Aguardando remoção.' }}
+
+  loop: "{{ certificados_para_remover }}"
+  loop_control:
+    label: "{{ item.host }} ({{ item.tipo }})"
+  register: zbx_plano_remove_loop
+
+- name: Guardar plano de remoção
+  ansible.builtin.set_fact:
+    zbx_plano_remove: "{{ zbx_plano_remove_loop.results | map(attribute='msg') | list }}"
+
+# ------------------------------------------------------------
+# 4. Executar remoção
+# ------------------------------------------------------------
+
+- name: Desabilitar item no Zabbix
+  ansible.builtin.uri:
+    url: "{{ zabbix_api_url }}"
+    method: POST
+    body_format: json
+    headers:
+      Content-Type: application/json-rpc
+    body:
+      jsonrpc: "2.0"
+      method: "item.update"
+      params:
+        itemid: "{{ item.itemid }}"
+        status: 1
+      auth: "{{ zabbix_api_token }}"
+      id: 1
+    validate_certs: "{{ zabbix_validate_certs }}"
+  delegate_to: localhost
+  loop: "{{ zbx_plano_remove }}"
+  loop_control:
+    label: "{{ item.host }} ({{ item.tipo }})"
+  when:
+    - item.status == 'PENDENTE'
+    - zabbix_aplicar_alteracoes | bool
+  register: zbx_remove
+  failed_when: false
+
+# ------------------------------------------------------------
+# 5. Consolidar resultado
+# ------------------------------------------------------------
+
+- name: Consolidar resultado da remoção
+  ansible.builtin.debug:
+    msg:
+      operacao: "{{ linha.operacao }}"
+      ticket: "{{ linha.ticket }}"
+      host: "{{ linha.host }}"
+      tipo: "{{ linha.tipo }}"
+      itemid: "{{ linha.itemid }}"
+      status: "{{ status }}"
+      mensagem: "{{ mensagem }}"
+  vars:
+    linha: "{{ item.0 }}"
+    resp: "{{ item.1 }}"
+
+    api_ok: >-
+      {{
+        resp.json is defined
+        and resp.json.error is not defined
+        and linha.itemid in (resp.json.result.itemids | default([]))
+      }}
+
+    api_erro: >-
+      {{
+        (resp.json.error.message ~ ' - ' ~ (resp.json.error.data | default('')))
+        if resp.json is defined and resp.json.error is defined
+        else (resp.msg | default('Sem resposta válida da API.'))
+      }}
+
+    status: >-
+      {{ linha.status if linha.status != 'PENDENTE'
+         else 'SIMULADO' if resp.skipped | default(false)
+         else 'REMOVIDO' if api_ok
+         else 'ERRO' }}
+
+    mensagem: >-
+      {{ linha.mensagem if linha.status != 'PENDENTE'
+         else 'Simulação (aplicar_alteracoes=false): o item seria desabilitado.' if status == 'SIMULADO'
+         else 'Item desabilitado com sucesso.' if status == 'REMOVIDO'
+         else api_erro }}
+
+  loop: "{{ zbx_plano_remove | zip(zbx_remove.results) | list }}"
+  loop_control:
+    label: "{{ item.0.host }} ({{ item.0.tipo }})"
+  register: zbx_resultado_remove_loop
+
+- name: Guardar o resultado para o relatório
+  ansible.builtin.set_fact:
+    resultado_remocao: "{{ zbx_resultado_remove_loop.results | map(attribute='msg') | list }}"
