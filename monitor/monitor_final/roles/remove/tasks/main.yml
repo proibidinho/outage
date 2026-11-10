@@ -1,0 +1,453 @@
+---
+# ============================================================
+# Role remove: desabilita itens de certificado já cadastrados
+# no host CERTIFICADOS_CLARO_BRASIL.
+#
+# Entrada:
+#   certificados_para_remover
+#
+# Saída:
+#   resultado_remocao   (uma linha por certificado)
+#   resultado_triggers  (uma linha por trigger encontrada no item)
+#
+# Status possíveis:
+#
+#   REMOVIDO
+#   SIMULADO
+#   JA_REMOVIDO
+#   NAO_ENCONTRADO
+#   AMBIGUO
+#   TIPO_INVALIDO
+#   ERRO
+#
+# TRIGGERS (OPCIONAL: só com tratar_triggers: true; por padrão não
+# são tocadas). Depois de desabilitar o item, as
+# triggers que usam esse item são buscadas pela API (trigger.get por
+# itemid), e não por nome:
+#
+#   - trigger CRIADA PELA AUTOMAÇÃO (nome exatamente igual ao padrão
+#     "Certificado <Tipo> <host> expirado" ou
+#     "Certificado <Tipo> <host> próximo de expirar")  -> EXCLUÍDA;
+#   - trigger com qualquer outro nome (criada à mão)    -> DESABILITADA
+#     (reversível);
+#   - trigger que usa OUTROS itens além deste, herdada de template ou
+#     vinda de descoberta                                -> NÃO é
+#     alterada (apenas informada no relatório).
+#
+# Também são tratadas as triggers dos itens que já estavam desabilitados
+# (JA_REMOVIDO), pois o fluxo antigo não mexia nelas. A consulta é só
+# leitura e roda também na simulação, para o relatório mostrar o que
+# seria feito. Falha em trigger vira status ERRO no relatório e nunca
+# interrompe a execução.
+#
+# Status das triggers: EXCLUIDA, DESABILITADA, JA_DESABILITADA, SIMULADO,
+# NAO_ALTERADA, NENHUMA, ERRO.
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Buscar itens do Zabbix
+# ------------------------------------------------------------
+
+- name: Buscar itens de certificado no Zabbix
+  ansible.builtin.uri:
+    url: "{{ zabbix_api_url }}"
+    method: POST
+    body_format: json
+    headers:
+      Content-Type: application/json-rpc
+    body:
+      jsonrpc: "2.0"
+      method: "item.get"
+      params:
+        host: "{{ zabbix_host_certificados }}"
+        search:
+          key_: "{{ zabbix_chave_certificado }}"
+        output:
+          - itemid
+          - name
+          - key_
+          - status
+      auth: "{{ zabbix_api_token }}"
+      id: 1
+    validate_certs: "{{ zabbix_validate_certs }}"
+  delegate_to: localhost
+  register: zbx_itens
+  failed_when: >-
+    zbx_itens.json is not defined
+    or zbx_itens.json.error is defined
+    or zbx_itens.json.result is not defined
+
+# ------------------------------------------------------------
+# 2. Interpretar itens
+# ------------------------------------------------------------
+
+- name: Interpretar a key dos itens existentes
+  ansible.builtin.set_fact:
+    zbx_certs: >-
+      {%- set r = namespace(lista=[]) -%}
+      {%- for i in zbx_itens.json.result -%}
+      {%- set p = i.key_ | regex_findall(zabbix_chave_regex) -%}
+      {%- if p -%}
+      {%- set r.lista = r.lista + [{
+          'itemid': i.itemid,
+          'name': i.name,
+          'key_': i.key_,
+          'status': i.status | string,
+          'host': p[0][0] | lower,
+          'tipo': p[0][1] | lower
+      }] -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ r.lista }}
+
+# ------------------------------------------------------------
+# 3. Planejamento
+# ------------------------------------------------------------
+
+- name: Planejar remoções (somente leitura)
+  ansible.builtin.debug:
+    msg:
+      operacao: "REMOCAO"
+      ticket: "{{ item.ticket }}"
+      host: "{{ item.host }}"
+      tipo: "{{ item.tipo }}"
+      itemid: "{{ encontrados[0].itemid if encontrados | length == 1 else '' }}"
+      status: "{{ status }}"
+      mensagem: "{{ mensagem }}"
+  vars:
+    candidatos: >-
+      {{
+        zbx_certs
+        | selectattr('host', 'equalto', item.host | lower)
+        | selectattr('tipo', 'equalto', item.tipo | lower)
+        | list
+      }}
+
+    encontrados: >-
+      {{
+        candidatos
+        if candidatos | length <= 1
+        else candidatos | selectattr('status', 'equalto', '0') | list
+      }}
+
+    status: >-
+      {{ 'TIPO_INVALIDO' if (item.tipo | lower) not in ['externo', 'interno']
+         else 'NAO_ENCONTRADO' if candidatos | length == 0
+         else 'AMBIGUO' if encontrados | length != 1
+         else 'JA_REMOVIDO' if encontrados[0].status == '1'
+         else 'PENDENTE' }}
+
+    mensagem: >-
+      {{ 'Tipo não identificado na descrição do chamado (esperado Externo ou Interno).' if status == 'TIPO_INVALIDO'
+         else 'Nenhum item encontrado no Zabbix para este host e tipo.' if status == 'NAO_ENCONTRADO'
+         else 'Mais de um item corresponde e não há exatamente um Enabled.' if status == 'AMBIGUO'
+         else 'O item já está desabilitado.' if status == 'JA_REMOVIDO'
+         else 'Aguardando remoção.' }}
+
+  loop: "{{ certificados_para_remover }}"
+  loop_control:
+    label: "{{ item.host }} ({{ item.tipo }})"
+  register: zbx_plano_remove_loop
+
+- name: Guardar plano de remoção
+  ansible.builtin.set_fact:
+    zbx_plano_remove: "{{ zbx_plano_remove_loop.results | map(attribute='msg') | list }}"
+
+# ------------------------------------------------------------
+# 4. Executar remoção
+# ------------------------------------------------------------
+
+- name: Desabilitar item no Zabbix
+  ansible.builtin.uri:
+    url: "{{ zabbix_api_url }}"
+    method: POST
+    body_format: json
+    headers:
+      Content-Type: application/json-rpc
+    body:
+      jsonrpc: "2.0"
+      method: "item.update"
+      params:
+        itemid: "{{ item.itemid }}"
+        status: 1
+      auth: "{{ zabbix_api_token }}"
+      id: 1
+    validate_certs: "{{ zabbix_validate_certs }}"
+  delegate_to: localhost
+  loop: "{{ zbx_plano_remove }}"
+  loop_control:
+    label: "{{ item.host }} ({{ item.tipo }})"
+  when:
+    - item.status == 'PENDENTE'
+    - zabbix_aplicar_alteracoes | bool
+  register: zbx_remove
+  failed_when: false
+
+# ------------------------------------------------------------
+# 5. Consolidar resultado
+# ------------------------------------------------------------
+
+- name: Consolidar resultado da remoção
+  ansible.builtin.debug:
+    msg:
+      operacao: "{{ linha.operacao }}"
+      ticket: "{{ linha.ticket }}"
+      host: "{{ linha.host }}"
+      tipo: "{{ linha.tipo }}"
+      itemid: "{{ linha.itemid }}"
+      status: "{{ status }}"
+      mensagem: "{{ mensagem }}"
+  vars:
+    linha: "{{ item.0 }}"
+    resp: "{{ item.1 }}"
+
+    api_ok: >-
+      {{
+        resp.json is defined
+        and resp.json.error is not defined
+        and linha.itemid in (resp.json.result.itemids | default([]))
+      }}
+
+    api_erro: >-
+      {{
+        (resp.json.error.message ~ ' - ' ~ (resp.json.error.data | default('')))
+        if resp.json is defined and resp.json.error is defined
+        else (resp.msg | default('Sem resposta válida da API.'))
+      }}
+
+    status: >-
+      {{ linha.status if linha.status != 'PENDENTE'
+         else 'SIMULADO' if resp.skipped | default(false)
+         else 'REMOVIDO' if api_ok
+         else 'ERRO' }}
+
+    mensagem: >-
+      {{ linha.mensagem if linha.status != 'PENDENTE'
+         else 'Simulação (aplicar_alteracoes=false): o item seria desabilitado.' if status == 'SIMULADO'
+         else 'Item desabilitado com sucesso.' if status == 'REMOVIDO'
+         else api_erro }}
+
+  loop: "{{ zbx_plano_remove | zip(zbx_remove.results) | list }}"
+  loop_control:
+    label: "{{ item.0.host }} ({{ item.0.tipo }})"
+  register: zbx_resultado_remove_loop
+
+- name: Guardar o resultado para o relatório
+  ansible.builtin.set_fact:
+    resultado_remocao: "{{ zbx_resultado_remove_loop.results | map(attribute='msg') | list }}"
+
+# ============================================================
+# TRIGGERS (OPCIONAL, desligado por padrão): passos 6 a 9 abaixo.
+# Só rodam com tratar_triggers: true (Survey / extra vars). Sem isso,
+# a remoção apenas desabilita o item e as triggers NÃO são tocadas.
+# ============================================================
+- name: Tratar as triggers dos itens removidos (opcional)
+  when: zabbix_tratar_triggers | bool
+  block:
+
+    # ------------------------------------------------------------
+    # 6. Triggers dos itens removidos.
+    #    Alvos: certificados cujo item foi desabilitado agora (REMOVIDO),
+    #    seria desabilitado (SIMULADO) ou já estava desabilitado
+    #    (JA_REMOVIDO). Item com ERRO, não encontrado ou ambíguo não é tocado.
+    # ------------------------------------------------------------
+    - name: Definir os certificados cujas triggers serão tratadas
+      ansible.builtin.set_fact:
+        zbx_alvos_trigger: >-
+          {{ resultado_remocao
+             | selectattr('status', 'in', ['REMOVIDO', 'SIMULADO', 'JA_REMOVIDO'])
+             | selectattr('itemid', 'ne', '')
+             | list }}
+
+    # Somente leitura: roda também na simulação. selectItems devolve os
+    # itens usados em cada trigger (para saber se ela é exclusiva do item).
+    # templateid / flags identificam triggers herdadas de template ou
+    # descobertas automaticamente.
+    - name: Buscar as triggers que usam cada item
+      ansible.builtin.uri:
+        url: "{{ zabbix_api_url }}"
+        method: POST
+        body_format: json
+        headers:
+          Content-Type: application/json-rpc
+        body:
+          jsonrpc: "2.0"
+          method: "trigger.get"
+          params:
+            itemids:
+              - "{{ item.itemid }}"
+            output:
+              - triggerid
+              - description
+              - status
+              - templateid
+              - flags
+            selectItems:
+              - itemid
+          auth: "{{ zabbix_api_token }}"
+          id: 1
+        validate_certs: "{{ zabbix_validate_certs }}"
+      delegate_to: localhost
+      loop: "{{ zbx_alvos_trigger }}"
+      loop_control:
+        label: "{{ item.host }} ({{ item.tipo }})"
+      register: zbx_trigger_get
+      failed_when: false
+
+    # ------------------------------------------------------------
+    # 7. Planejar (sem alterar nada). "acao" por trigger:
+    #    EXCLUIR          nome idêntico ao padrão criado pela automação
+    #    DESABILITAR      qualquer outro nome (trigger manual)
+    #    JA_DESABILITADA  nome fora do padrão e já desabilitada
+    #    NAO_ALTERAR      usa outros itens, é herdada ou descoberta
+    #    NENHUMA          o item não tem trigger
+    #    ERRO_CONSULTA    a consulta à API falhou
+    #    O nome é comparado sem diferenciar maiúsculas/minúsculas, com
+    #    "star." do host escrito como "*." (igual ao que a role cria faz).
+    # ------------------------------------------------------------
+    - name: Planejar o tratamento das triggers (somente leitura)
+      ansible.builtin.set_fact:
+        zbx_plano_trigger: >-
+          {%- set r = namespace(lista=[]) -%}
+          {%- for par in zbx_alvos_trigger | zip(zbx_trigger_get.results | default([])) -%}
+          {%- set linha = par[0] -%}
+          {%- set resp = par[1] -%}
+          {%- set base = {'ticket': linha.ticket, 'host': linha.host, 'tipo': linha.tipo, 'itemid': linha.itemid} -%}
+          {%- set nome_host = linha.host | lower | regex_replace('^star\\.', '*.') -%}
+          {%- set nomes_padrao = ['certificado ' ~ (linha.tipo | lower) ~ ' ' ~ nome_host ~ ' expirado', 'certificado ' ~ (linha.tipo | lower) ~ ' ' ~ nome_host ~ ' próximo de expirar'] -%}
+          {%- if resp.json is not defined or resp.json.error is defined or resp.json.result is not defined -%}
+          {%- set erro = (resp.json.error.message ~ ' - ' ~ (resp.json.error.data | default(''))) if (resp.json is defined and resp.json.error is defined) else (resp.msg | default('Sem resposta válida da API.')) -%}
+          {%- set r.lista = r.lista + [base | combine({'triggerid': '', 'trigger': '', 'acao': 'ERRO_CONSULTA', 'mensagem': 'Não foi possível consultar as triggers do item: ' ~ erro})] -%}
+          {%- elif resp.json.result | length == 0 -%}
+          {%- set r.lista = r.lista + [base | combine({'triggerid': '', 'trigger': '', 'acao': 'NENHUMA', 'mensagem': 'O item não tem triggers.'})] -%}
+          {%- else -%}
+          {%- for t in resp.json.result -%}
+          {%- set exclusiva = (t['items'] | length == 1) and (t['items'][0].itemid | string == linha.itemid | string) -%}
+          {%- set herdada = ((t.templateid | default('0') | string) != '0') or ((t.flags | default('0') | string) != '0') -%}
+          {%- set padrao = (t.description | lower) in nomes_padrao -%}
+          {%- if herdada -%}
+          {%- set acao = 'NAO_ALTERAR' -%}
+          {%- set msg = 'Trigger herdada de template ou descoberta automática: não foi alterada. Trate manualmente.' -%}
+          {%- elif not exclusiva -%}
+          {%- set acao = 'NAO_ALTERAR' -%}
+          {%- set msg = 'A trigger usa outros itens além deste: não foi alterada. Trate manualmente.' -%}
+          {%- elif padrao -%}
+          {%- set acao = 'EXCLUIR' -%}
+          {%- set msg = 'Trigger criada pela automação (nome no padrão): será excluída.' -%}
+          {%- elif (t.status | string) == '1' -%}
+          {%- set acao = 'JA_DESABILITADA' -%}
+          {%- set msg = 'Trigger com nome fora do padrão da automação, já estava desabilitada.' -%}
+          {%- else -%}
+          {%- set acao = 'DESABILITAR' -%}
+          {%- set msg = 'Trigger com nome fora do padrão da automação: será desabilitada.' -%}
+          {%- endif -%}
+          {%- set r.lista = r.lista + [base | combine({'triggerid': t.triggerid | string, 'trigger': t.description, 'acao': acao, 'mensagem': msg})] -%}
+          {%- endfor -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {{ r.lista }}
+
+    # ------------------------------------------------------------
+    # 8. Executar. Duas tasks (uma por ação) para o corpo da chamada
+    #    ficar simples. Só com aplicar_alteracoes = true.
+    #    failed_when: false -> um erro não interrompe as demais; o
+    #    resultado real de cada chamada é avaliado no passo 9.
+    # ------------------------------------------------------------
+    - name: Excluir as triggers criadas pela automação
+      ansible.builtin.uri:
+        url: "{{ zabbix_api_url }}"
+        method: POST
+        body_format: json
+        headers:
+          Content-Type: application/json-rpc
+        body:
+          jsonrpc: "2.0"
+          method: "trigger.delete"
+          params:
+            - "{{ item.triggerid }}"
+          auth: "{{ zabbix_api_token }}"
+          id: 1
+        validate_certs: "{{ zabbix_validate_certs }}"
+      delegate_to: localhost
+      loop: "{{ zbx_plano_trigger }}"
+      loop_control:
+        label: "{{ item.host }} - {{ item.trigger }}"
+      when: item.acao == 'EXCLUIR' and zabbix_aplicar_alteracoes | bool
+      register: zbx_trigger_exclui
+      failed_when: false
+
+    - name: Desabilitar as demais triggers (nome fora do padrão)
+      ansible.builtin.uri:
+        url: "{{ zabbix_api_url }}"
+        method: POST
+        body_format: json
+        headers:
+          Content-Type: application/json-rpc
+        body:
+          jsonrpc: "2.0"
+          method: "trigger.update"
+          params:
+            triggerid: "{{ item.triggerid }}"
+            status: 1
+          auth: "{{ zabbix_api_token }}"
+          id: 1
+        validate_certs: "{{ zabbix_validate_certs }}"
+      delegate_to: localhost
+      loop: "{{ zbx_plano_trigger }}"
+      loop_control:
+        label: "{{ item.host }} - {{ item.trigger }}"
+      when: item.acao == 'DESABILITAR' and zabbix_aplicar_alteracoes | bool
+      register: zbx_trigger_desabilita
+      failed_when: false
+
+    # ------------------------------------------------------------
+    # 9. Resultado das triggers. Sucesso = sem "error" no JSON-RPC e
+    #    triggerid confirmado em result.triggerids.
+    # ------------------------------------------------------------
+    - name: Consolidar resultado das triggers
+      ansible.builtin.debug:
+        msg:
+          ticket: "{{ linha.ticket }}"
+          host: "{{ linha.host }}"
+          tipo: "{{ linha.tipo }}"
+          itemid: "{{ linha.itemid }}"
+          triggerid: "{{ linha.triggerid }}"
+          trigger: "{{ linha.trigger }}"
+          acao: "{{ linha.acao }}"
+          status: "{{ status }}"
+          mensagem: "{{ mensagem }}"
+      vars:
+        linha: "{{ item.0 }}"
+        resp: "{{ item.1 if linha.acao == 'EXCLUIR' else item.2 }}"
+        api_ok: >-
+          {{ resp.json is defined
+             and resp.json.error is not defined
+             and linha.triggerid in (resp.json.result.triggerids | default([])) }}
+        api_erro: >-
+          {{ (resp.json.error.message ~ ' - ' ~ (resp.json.error.data | default('')))
+             if resp.json is defined and resp.json.error is defined
+             else (resp.msg | default('Sem resposta válida da API.')) }}
+        status: >-
+          {{ 'ERRO' if linha.acao == 'ERRO_CONSULTA'
+             else 'NENHUMA' if linha.acao == 'NENHUMA'
+             else 'NAO_ALTERADA' if linha.acao == 'NAO_ALTERAR'
+             else 'JA_DESABILITADA' if linha.acao == 'JA_DESABILITADA'
+             else 'SIMULADO' if resp.skipped | default(false)
+             else 'EXCLUIDA' if (linha.acao == 'EXCLUIR' and api_ok)
+             else 'DESABILITADA' if (linha.acao == 'DESABILITAR' and api_ok)
+             else 'ERRO' }}
+        mensagem: >-
+          {{ linha.mensagem if status in ['NENHUMA', 'NAO_ALTERADA', 'JA_DESABILITADA'] or linha.acao == 'ERRO_CONSULTA'
+             else 'Simulação (aplicar_alteracoes=false): a trigger seria excluída.' if (status == 'SIMULADO' and linha.acao == 'EXCLUIR')
+             else 'Simulação (aplicar_alteracoes=false): a trigger seria desabilitada.' if status == 'SIMULADO'
+             else 'Trigger criada pela automação: excluída com sucesso.' if status == 'EXCLUIDA'
+             else 'Trigger desabilitada com sucesso (nome fora do padrão da automação).' if status == 'DESABILITADA'
+             else api_erro }}
+      loop: "{{ zbx_plano_trigger | zip(zbx_trigger_exclui.results | default([]), zbx_trigger_desabilita.results | default([])) | list }}"
+      loop_control:
+        label: "{{ item.0.host }} - {{ item.0.trigger }}"
+      register: zbx_resultado_trigger_loop
+
+    - name: Guardar o resultado das triggers para o relatório
+      ansible.builtin.set_fact:
+        resultado_triggers: "{{ zbx_resultado_trigger_loop.results | map(attribute='msg') | list }}"

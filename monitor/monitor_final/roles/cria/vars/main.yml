@@ -5,7 +5,8 @@
 # O item-modelo é um item já existente no host de certificados com
 # o mesmo tipo (Externo/Interno) do certificado a criar. Só os
 # campos abaixo, e só quando preenchidos no modelo, vão no
-# item.create. hostid, name e key_ são sempre montados pela role.
+# item.create. hostid, name, key_ e description são sempre montados pela
+# role (description = "Chamado Jira: <ticket>", sem herdar a do modelo).
 #
 # Se o tipo de item usado em produção exigir outros campos (ex.:
 # params, timeout, trapper_hosts, snmp_oid, url...), acrescente-os
@@ -21,7 +22,6 @@ cria_campos_modelo:
   - history
   - trends
   - units
-  - description
   - status
   - tags
   - preprocessing

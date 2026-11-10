@@ -34,12 +34,14 @@
 # Como o item novo é montado (nada é inventado):
 #   - key_       : a key do item-modelo, trocando host e data;
 #   - name       : o nome do item-modelo, trocando host e data;
-#   - description: a do item-modelo + "Chamado Jira: <ticket>";
+#   - description: somente "Chamado Jira: <ticket>" (não herda a do modelo);
 #   - hostid     : obtido por host.get do host de certificados;
 #   - demais atributos: copiados do item-modelo (cria_campos_modelo).
 #
-# Trigger (somente para itens CRIADOS): módulo
-# community.zabbix.zabbix_trigger, usando a key exata do item criado.
+# Triggers (somente para itens CRIADOS): módulo community.zabbix.zabbix_trigger,
+# usando a key exata do item criado. São duas: expiração ("expirado") e
+# pré-expiração ("irá expirar em"). Cada uma tem o seu register
+# (zbx_trigger_expirado / zbx_trigger_preexp) e o passo 7 avalia as duas.
 # ============================================================
 
 # ------------------------------------------------------------
@@ -266,7 +268,7 @@
          else 'ERRO' }}
     mensagem: >-
       {{ linha.mensagem if linha.status != 'PENDENTE'
-         else 'Simulação (aplicar_alteracoes=false): seria criado o item "' ~ linha.payload.name ~ '" com a key ' ~ linha.payload.key_ ~ ' e a trigger de expiração correspondente.' if status == 'SIMULADO'
+         else 'Simulação (aplicar_alteracoes=false): seria criado o item "' ~ linha.payload.name ~ '" com a key ' ~ linha.payload.key_ ~ ' e as triggers de expiração e pré-expiração correspondentes.' if status == 'SIMULADO'
          else 'Item criado: ' ~ linha.payload.key_ if status == 'CRIADO'
          else api_erro }}
   loop: "{{ zbx_plano | zip(zbx_create.results) | list }}"
@@ -279,7 +281,7 @@
     resultado_criacao: "{{ zbx_resultado_loop.results | map(attribute='msg') | list }}"
 
 # ------------------------------------------------------------
-# 6. Criar trigger somente para itens que foram realmente criados.
+# 6. Criar triggers somente para itens que foram realmente criados.
 #    Em simulação, resultado_criacao não contém status CRIADO, então
 #    nenhuma trigger é criada.
 #
@@ -321,7 +323,7 @@
   loop: "{{ resultado_criacao | selectattr('status', 'equalto', 'CRIADO') | list }}"
   loop_control:
     label: "{{ item.host }} ({{ item.tipo }})"
-  register: zbx_trigger_create
+  register: zbx_trigger_expirado
   when: zabbix_aplicar_alteracoes | bool
   ignore_errors: true
 
@@ -333,7 +335,7 @@
       Verifica status do certificado.
       Gera alarme quando estiver para expirar em 45 dias
     params:
-      event_name: "Certificado {{ item.tipo }} {{ item.host | regex_replace('^star\\.', '*.') }} proximo de expirar"
+      event_name: "Certificado {{ item.tipo }} {{ item.host | regex_replace('^star\\.', '*.') }} próximo de expirar"
       expression: 'find(/{{ zabbix_host_certificados }}/{{ item.key_ }},#1,"like","irá expirar em")<>0'
       recovery_mode: recovery_expression
       recovery_expression: 'find(/{{ zabbix_host_certificados }}/{{ item.key_ }},#1,"like","OK")<>0'
@@ -354,7 +356,7 @@
   loop: "{{ resultado_criacao | selectattr('status', 'equalto', 'CRIADO') | list }}"
   loop_control:
     label: "{{ item.host }} ({{ item.tipo }})"
-  register: zbx_trigger_create
+  register: zbx_trigger_preexp
   when: zabbix_aplicar_alteracoes | bool
   ignore_errors: true
 
@@ -365,7 +367,7 @@
 #       trigger: "Certificado {{ item.item.tipo }} {{ item.item.host | regex_replace('^star\\.', '*.') }} expirado"
 #       resultado: "{{ 'OK' if not (item.failed | default(false)) else 'ERRO' }}"
 #       mensagem: "{{ item.msg | default('Trigger criada/atualizada.') }}"
-#   loop: "{{ zbx_trigger_create.results | default([]) }}"
+#   loop: "{{ ((zbx_trigger_expirado | default({})).results | default([])) + ((zbx_trigger_preexp | default({})).results | default([])) }}"
 #   loop_control:
 #     label: "{{ item.item.host | default('trigger') }}"
 #   when: zabbix_aplicar_alteracoes | bool
@@ -380,14 +382,17 @@
   ansible.builtin.set_fact:
     resultado_criacao: >-
       {%- set falhas = namespace(lista=[]) -%}
-      {%- for t in zbx_trigger_create.results | default([]) if t.failed | default(false) -%}
-      {%- set falhas.lista = falhas.lista + [{'itemid': t.item.itemid, 'msg': t.msg | default('sem detalhes')}] -%}
+      {%- for t in ((zbx_trigger_expirado | default({})).results | default([])) if t.failed | default(false) -%}
+      {%- set falhas.lista = falhas.lista + [{'itemid': t.item.itemid, 'texto': 'trigger de expiração: ' ~ (t.msg | default('sem detalhes'))}] -%}
+      {%- endfor -%}
+      {%- for t in ((zbx_trigger_preexp | default({})).results | default([])) if t.failed | default(false) -%}
+      {%- set falhas.lista = falhas.lista + [{'itemid': t.item.itemid, 'texto': 'trigger de pré-expiração: ' ~ (t.msg | default('sem detalhes'))}] -%}
       {%- endfor -%}
       {%- set nova = namespace(lista=[]) -%}
       {%- for r in resultado_criacao -%}
       {%- set f = falhas.lista | selectattr('itemid', 'equalto', r.itemid) | list -%}
       {%- if f | length > 0 -%}
-      {%- set nova.lista = nova.lista + [r | combine({'status': 'ERRO', 'mensagem': 'Item criado (itemid ' ~ r.itemid ~ ', key ' ~ r.key_ ~ '), mas a trigger NÃO foi criada: ' ~ f[0].msg ~ ' Crie a trigger manualmente.'})] -%}
+      {%- set nova.lista = nova.lista + [r | combine({'status': 'ERRO', 'mensagem': 'Item criado (itemid ' ~ r.itemid ~ ', key ' ~ r.key_ ~ '), mas houve falha: ' ~ (f | map(attribute='texto') | join(' | ')) ~ '. Crie a(s) trigger(s) manualmente.'})] -%}
       {%- else -%}
       {%- set nova.lista = nova.lista + [r] -%}
       {%- endif -%}

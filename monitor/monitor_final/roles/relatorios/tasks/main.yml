@@ -43,11 +43,30 @@
   loop_control:
     label: "{{ item.operacao }} {{ item.host }} ({{ item.tipo }})"
 
+# Triggers dos itens removidos (role remove): excluídas, desabilitadas ou
+# apenas informadas. Em simulação, SIMULADO indica o que seria feito.
+- name: OUTPUT | Triggers dos certificados removidos
+  ansible.builtin.debug:
+    msg:
+      modo: "{{ 'APLICAÇÃO REAL' if zabbix_aplicar_alteracoes | bool else 'SIMULAÇÃO - nenhuma alteração gravada' }}"
+      ticket: "{{ item.ticket }}"
+      host: "{{ item.host }}"
+      trigger: "{{ item.trigger }}"
+      status: "{{ item.status }}"
+      mensagem: "{{ item.mensagem }}"
+  loop: "{{ resultado_triggers | default([]) }}"
+  loop_control:
+    label: "{{ item.host }} - {{ item.trigger }}"
+
 # O e-mail é enviado antes de falhar o job, para que os resultados
-# também cheguem ao destinatário quando uma operação terminar em ERRO.
+# também cheguem ao destinatário quando uma operação terminar em ERRO
+# (certificado ou trigger).
 - name: Falhar o job se alguma operação terminou em ERRO
   ansible.builtin.fail:
     msg: >-
-      {{ relatorio_certificados | selectattr('status', 'equalto', 'ERRO') | list | length }}
+      {{ (relatorio_certificados | selectattr('status', 'equalto', 'ERRO') | list | length)
+         + (resultado_triggers | default([]) | selectattr('status', 'equalto', 'ERRO') | list | length) }}
       operação(ões) terminaram em ERRO. Veja o relatório enviado para {{ email }}.
-  when: relatorio_certificados | selectattr('status', 'equalto', 'ERRO') | list | length > 0
+  when: >-
+    (relatorio_certificados | selectattr('status', 'equalto', 'ERRO') | list | length) > 0
+    or (resultado_triggers | default([]) | selectattr('status', 'equalto', 'ERRO') | list | length) > 0

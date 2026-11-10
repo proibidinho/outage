@@ -59,7 +59,7 @@ CERTIFICADOS ZABBIX • JIRA → ZABBIX
            color:#1f2933;">
 
 <b>Processamento concluído.</b><br />
-Segue abaixo o resultado das operações e os certificados alterados ou previstos para alteração/criação no Zabbix. NÃO SE ESQUEÇA DE FECHAR O CHAMADO!!
+Segue abaixo o resultado das operações e os certificados alterados, removidos ou previstos para alteração/criação/remoção no Zabbix. NÃO SE ESQUEÇA DE FECHAR O CHAMADO!!
 
 </td>
 </tr>
@@ -109,10 +109,19 @@ Certificados para criação
 
 <tr>
 <td width="190" valign="top" style="width:190px;{{ celula }}color:#5f6b7a;">
+Certificados para remoção
+</td>
+<td valign="top" style="{{ celula }}">
+{{ certificados_para_remover | default([]) | length }}
+</td>
+</tr>
+
+<tr>
+<td width="190" valign="top" style="width:190px;{{ celula }}color:#5f6b7a;">
 Total de certificados
 </td>
 <td valign="top" style="{{ celula }}">
-{{ (certificados_para_atualizar | length) + (certificados_para_criar | length) }}
+{{ (certificados_para_atualizar | length) + (certificados_para_criar | length) + (certificados_para_remover | default([]) | length) }}
 </td>
 </tr>
 
@@ -165,6 +174,8 @@ Operação
 
 {% if ticket.key in (tickets_criacao | map(attribute='key') | list) %}
 CRIAÇÃO
+{% elif ticket.key in (tickets_remocao | default([]) | map(attribute='key') | list) %}
+REMOÇÃO
 {% else %}
 ATUALIZAÇÃO
 {% endif %}
@@ -205,7 +216,7 @@ Operação
 </td>
 </tr>
 
-{% for cert in (certificados_para_atualizar + certificados_para_criar) %}
+{% for cert in (certificados_para_atualizar + certificados_para_criar + (certificados_para_remover | default([]))) %}
 
 {% if cert.ticket == ticket.key %}
 
@@ -220,7 +231,7 @@ Operação
 </td>
 
 <td valign="top" style="{{ celula }}">
-{{ cert.validade }}
+{{ cert.validade if cert.validade else '—' }}
 </td>
 
 <td valign="top" style="{{ celula }}">
@@ -228,6 +239,10 @@ Operação
 {% if cert.operacao == 'CRIACAO' %}
 <span style="color:#1565c0;font-weight:bold;">
 CRIAÇÃO
+</span>
+{% elif cert.operacao == 'REMOCAO' %}
+<span style="color:#c62828;font-weight:bold;">
+REMOÇÃO
 </span>
 {% else %}
 <span style="color:#2e7d32;font-weight:bold;">
@@ -262,7 +277,7 @@ RESULTADO DAS OPERAÇÕES NO ZABBIX
 {% if zabbix_aplicar_alteracoes | bool %}
 APLICAÇÃO REAL — alterações enviadas ao Zabbix. LEMBRE-SE: O ANSIBLE NÃO FECHA O CHAMADO!!
 {% else %}
-SIMULAÇÃO — nenhuma alteração foi gravada; os itens abaixo indicam o que seria alterado/criado.
+SIMULAÇÃO — nenhuma alteração foi gravada; os itens abaixo indicam o que seria alterado/criado/removido.
 {% endif %}
 <br />
 <b>Data/Hora:</b> {{ ansible_date_time.date }} {{ ansible_date_time.time }}
@@ -270,6 +285,50 @@ SIMULAÇÃO — nenhuma alteração foi gravada; os itens abaixo indicam o que s
 <b>Total processado:</b> {{ relatorio_certificados | length }}
 </td>
 </tr>
+
+{% if certificados_para_remover | default([]) | length > 0 and not (zabbix_tratar_triggers | default(false) | bool) %}
+<tr>
+<td style="padding:0 24px 12px 24px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+       style="border-collapse:collapse;">
+<tr>
+<td style="background:#fff8e1;border:1px solid #f9a825;border-left:4px solid #f9a825;padding:10px 14px;{{ fonte }}font-size:13px;line-height:19px;color:#5d4037;">
+<b>ATENÇÃO — REMOÇÃO DE MONITORAÇÃO:</b>
+a automação apenas <b>desabilita o item</b> do certificado no Zabbix.
+As <b>triggers</b> associadas <b>continuam ativas</b> e precisam ser
+<b>removidas manualmente</b> pelo time de Zabbix.
+</td>
+</tr>
+</table>
+</td>
+</tr>
+{% endif %}
+{% if certificados_para_remover | default([]) | length > 0 and zabbix_tratar_triggers | default(false) | bool %}
+{% set trig = resultado_triggers | default([]) %}
+<tr>
+<td style="padding:0 24px 12px 24px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+       style="border-collapse:collapse;">
+<tr>
+<td style="background:#fff8e1;border:1px solid #f9a825;border-left:4px solid #f9a825;padding:10px 14px;{{ fonte }}font-size:13px;line-height:19px;color:#5d4037;">
+<b>REMOÇÃO DE MONITORAÇÃO — COMO AS TRIGGERS SÃO TRATADAS:</b><br />
+1) O <b>item</b> do certificado é <b>desabilitado</b>.<br />
+2) A <b>trigger criada pela automação</b> (nome no padrão
+"Certificado &lt;Tipo&gt; &lt;host&gt; expirado" ou "... próximo de expirar") é <b>excluída</b>.<br />
+3) Qualquer <b>outra trigger</b> do item (nome diferente do padrão) é apenas <b>desabilitada</b>.<br />
+4) Trigger que usa <b>outros itens</b>, herdada de template ou de descoberta <b>não é alterada</b>
+e precisa ser tratada <b>manualmente</b> pelo time de Zabbix.<br />
+5) Problemas que já estavam abertos em triggers <b>desabilitadas</b> podem continuar
+registrados no Zabbix até serem fechados manualmente.
+{% if (trig | selectattr('status', 'in', ['NAO_ALTERADA', 'ERRO']) | list | length) > 0 %}
+<br /><b style="color:#c62828;">ATENÇÃO: há trigger(s) NÃO ALTERADA(S) ou com ERRO na tabela de triggers abaixo. Tratar manualmente.</b>
+{% endif %}
+</td>
+</tr>
+</table>
+</td>
+</tr>
+{% endif %}
 
 <tr>
 <td style="padding:0 24px 16px 24px;">
@@ -291,13 +350,49 @@ SIMULAÇÃO — nenhuma alteração foi gravada; os itens abaixo indicam o que s
 <td style="{{ celula }}">{{ linha.host | default('') }}</td>
 <td style="{{ celula }}">{{ linha.tipo | default('') }}</td>
 <td style="{{ celula }}">{{ linha.validade_anterior | default('—') }}</td>
-<td style="{{ celula }}">{{ linha.validade_solicitada | default('') }}</td>
+<td style="{{ celula }}">{{ linha.validade_solicitada | default('—') }}</td>
 <td style="{{ celula }}"><b>{{ linha.status | default('') }}</b><br />{{ linha.mensagem | default('') }}</td>
 </tr>
 {% endfor %}
 </table>
 </td>
 </tr>
+
+{% if resultado_triggers | default([]) | length > 0 %}
+<tr>
+<td style="{{ secao }}{{ fonte }}">
+TRIGGERS DOS ITENS REMOVIDOS
+</td>
+</tr>
+
+<tr>
+<td style="padding:0 24px 16px 24px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+       style="border-collapse:collapse;{{ fonte }}font-size:13px;">
+<tr>
+<td style="{{ cabecalho }}">Chamado</td>
+<td style="{{ cabecalho }}">Host</td>
+<td style="{{ cabecalho }}">Trigger</td>
+<td style="{{ cabecalho }}">Status</td>
+</tr>
+{% for tr in resultado_triggers %}
+<tr>
+<td style="{{ celula }}">{{ tr.ticket | default('') }}</td>
+<td style="{{ celula }}">{{ tr.host | default('') }}</td>
+<td style="{{ celula }}">{{ tr.trigger if tr.trigger else '—' }}</td>
+<td style="{{ celula }}">
+{% if tr.status in ['NAO_ALTERADA', 'ERRO'] %}
+<b style="color:#c62828;">{{ tr.status }}</b>
+{% else %}
+<b>{{ tr.status | default('') }}</b>
+{% endif %}
+<br />{{ tr.mensagem | default('') }}</td>
+</tr>
+{% endfor %}
+</table>
+</td>
+</tr>
+{% endif %}
 
 <tr>
 <td style="padding:22px 24px 22px 24px;
