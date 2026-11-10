@@ -1,0 +1,137 @@
+---
+- name: Montar dados da planilha
+  ansible.builtin.set_fact:
+    outage_planilha: []
+
+- name: Adicionar ativos das GMUDs
+  ansible.builtin.set_fact:
+    outage_planilha: >-
+      {{
+        outage_planilha +
+        [{
+          'gml': item.0.chave,
+          'ativo': item.1,
+          'tipo': 'HOST',
+          'inicio': item.0.inicio,
+          'fim': item.0.fim
+        }]
+      }}
+  loop: "{{ gmuds_atualizadas | subelements('ativos') }}"
+
+- name: Adicionar SERVICES Dynatrace na planilha
+  ansible.builtin.set_fact:
+    outage_planilha: >-
+      {{
+        outage_planilha +
+        [{
+          'gml': item.0.gml,
+          'ativo': item.1,
+          'tipo': 'SERVICE',
+          'inicio': item.0.inicio,
+          'fim': item.0.fim
+        }]
+      }}
+  loop: "{{ dynatrace_relatorio | default([]) | subelements('entidades') }}"
+  when:
+    - item.1 is match('^SERVICE-')
+
+- name: Montar matriz Excel
+  ansible.builtin.set_fact:
+    excel_matrix: >-
+      {%- set matrix = [] -%}
+
+        {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 1, 'cell_value': 'GML'}) -%}
+        {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 2, 'cell_value': 'ATIVO'}) -%}
+        {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 3, 'cell_value': 'TIPO'}) -%}
+        {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 4, 'cell_value': 'INICIO'}) -%}
+        {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 5, 'cell_value': 'FIM'}) -%}
+
+      {%- for item in outage_planilha | default([]) -%}
+        {%- set row = loop.index + 1 -%}
+
+        {%- set _ = matrix.append({'cell_row': row, 'cell_col': 1, 'cell_value': item.gml}) -%}
+        {%- set _ = matrix.append({'cell_row': row, 'cell_col': 2, 'cell_value': item.ativo}) -%}
+        {%- set _ = matrix.append({'cell_row': row, 'cell_col': 3, 'cell_value': item.tipo}) -%}
+        {%- set _ = matrix.append({'cell_row': row, 'cell_col': 4, 'cell_value': item.inicio}) -%}
+        {%- set _ = matrix.append({'cell_row': row, 'cell_col': 5, 'cell_value': item.fim}) -%}
+      {%- endfor -%}
+
+      {{ matrix }}
+
+
+- name: Definir caminho da planilha
+  ansible.builtin.set_fact:
+    relatorio_excel: "/tmp/outages_gml.xlsx"
+
+- name: Criar planilha
+  ans2dev.general.open_xl:
+    op: n
+    dest: "{{ relatorio_excel }}"
+    sheet_name: "Outages"
+    updates_matrix: "{{ excel_matrix }}"
+
+- name: RELATORIO | Resumo da planilha
+  ansible.builtin.debug:
+    msg:
+      registros: "{{ outage_planilha | default([]) | length }}"
+      arquivo: "{{ relatorio_excel }}"
+# -------------------------------------------------------------------------
+# EMAIL | Enviar relatório de Outages
+# -------------------------------------------------------------------------
+- name: EMAIL | Enviar relatório de Outages
+  community.general.mail:
+    host: vip_smtp.claro.com.br
+    port: 25
+    from: coeeaiops@claro.com.br
+    to: "hassan.silva.terceiros@claro.com.br"
+    subject: >-
+      Relatorio Outages GMUD -
+      {{ ansible_date_time.date }}
+    subtype: plain
+    attach:
+      - "{{ relatorio_excel }}"
+    body: |
+      Prezado(a),
+
+      Segue em anexo o relatório de Outages criados pelo processo automático.
+
+      ================================================================
+      RESUMO
+      ================================================================
+
+      Data/Hora: {{ ansible_date_time.date }} {{ ansible_date_time.time }}
+
+      Total de GMUDs processadas:
+      {{ gmuds_atualizadas | length }}
+
+      Total de registros na planilha:
+      {{ outage_planilha | default([]) | length }}
+
+      ================================================================
+      GMUDS PROCESSADAS
+      ================================================================
+
+      {% for item in gmuds_atualizadas | default([]) %}
+      - {{ item.chave }}
+        Inicio: {{ item.inicio }}
+        Fim: {{ item.fim }}
+        Ativos: {{ item.ativos | length }}
+      {% endfor %}
+
+      ================================================================
+
+      A planilha em anexo contém:
+
+      - GML
+      - Ativo
+      - Início do Outage
+      - Fim do Outage
+
+      Caso uma GMUD possua múltiplos ativos,
+      haverá uma linha para cada ativo.
+
+      Este é um e-mail automático gerado pelo Ansible.
+
+  # when:
+  #   - email_destino is defined
+  #   - email_destino | length > 0

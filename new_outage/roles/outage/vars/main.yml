@@ -1,0 +1,16 @@
+---
+# gmuds:
+#   - chave: "GML-TESTE"
+#     resumo: "Teste de criação de Maintenance Window"
+#     inicio: "2026-09-18T13:05:00.000-0300"
+#     fim: "2026-09-18T18:00:00.000-0300"
+#     ativos:
+#       - "net002prdlnx795"
+
+# gmuds:
+#   - chave: "GML-TESTE"
+#     resumo: "Teste Dynatrace"
+#     inicio: "2026-09-18T18:08:00.000-0300"
+#     fim: "2026-09-18T19:10:00.000-0300"
+#     ativos:
+#       - "901269"

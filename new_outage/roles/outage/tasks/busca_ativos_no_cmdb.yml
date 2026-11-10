@@ -1,0 +1,75 @@
+---
+- name: Validar se a GMUD possui sistema vinculado
+  ansible.builtin.assert:
+    that:
+      - gmud.ativos is defined
+      - gmud.ativos | length > 0
+    fail_msg: >-
+      A GMUD {{ gmud.chave }} não possui um sistema CMDB associado.
+
+- name: Consultar objetos CMDB
+  ansible.builtin.uri:
+    url: "{{ jira_url }}/object/{{ item }}"
+    method: GET
+    user: "{{ jira_user }}"
+    password: "{{ jira_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    headers:
+      Accept: application/json
+    status_code: 200
+  loop: "{{ gmud.ativos }}"
+  register: sistema_cmdb
+  environment: "{{ proxy_env }}"
+
+- name: Inicializar listas
+  ansible.builtin.set_fact:
+    ativos_cmdb: []
+    nomes_cmdb: []
+
+- name: Processar objetos CMDB
+  ansible.builtin.set_fact:
+    ativos_cmdb: >-
+      {{
+        ativos_cmdb
+        +
+        (
+          atributo_servidor[0].objectAttributeValues
+          | map(attribute='displayValue')
+          | list
+          if atributo_servidor | length > 0
+          else [ item.json.label ]
+        )
+      }}
+
+    nomes_cmdb: "{{ nomes_cmdb + [ item.json.label ] }}"
+  vars:
+    atributo_servidor: >-
+      {{
+        item.json.attributes
+        | selectattr('objectTypeAttribute.name', 'equalto', 'Servidor')
+        | list
+      }}
+  loop: "{{ sistema_cmdb.results }}"
+
+- name: Atualizar lista de GMUDs com servidores do CMDB
+  ansible.builtin.set_fact:
+    gmuds_atualizadas: >-
+      {{
+        gmuds_atualizadas +
+        [
+          gmud | combine({
+            'ativos': ativos_cmdb | unique,
+            'nome_cmdb': nomes_cmdb | unique
+          })
+        ]
+      }}
+
+
+  
+- name: Debug ativos encontrados
+  ansible.builtin.debug:
+    msg:
+      gmud: "{{ gmud.chave }}"
+      sistemas_cmdb: "{{ nomes_cmdb }}"
+      ativos_cmdb: "{{ ativos_cmdb | unique }}"
