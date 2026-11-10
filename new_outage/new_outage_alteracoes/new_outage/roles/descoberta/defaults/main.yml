@@ -1,0 +1,19 @@
+---
+# ============================================================
+# De onde vem a janela de downtime (início/fim) de cada GMUD.
+#
+#   atividade  (padrão) lê da atividade de Observabilidade
+#   gml_pai             lê da própria GMUD (comportamento antigo)
+#
+# Em qualquer dos modos, os campos usados são os de
+# jira_inicio_field e jira_fim_field (group_vars/vault).
+#
+# PARA VOLTAR A LER DA GML PAI, no group_vars/all.yml:
+#   jira_janela_origem: gml_pai
+#   jira_inicio_field: <customfield da GMUD pai, o que era antes>
+#   jira_fim_field:    <customfield da GMUD pai, o que era antes>
+# Não é preciso alterar nenhum código.
+#
+# (Precedência mais baixa: group_vars, playbook e Survey sobrescrevem.)
+# ============================================================
+jira_janela_origem: atividade

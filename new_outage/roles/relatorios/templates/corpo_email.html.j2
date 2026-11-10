@@ -229,6 +229,11 @@ GMUD
 ({{ (g.duracao_min | int) // 60 }}h{{ '%02d' | format((g.duracao_min | int) % 60) }}min)
 </span>
 {% endif %}
+{% if g.atividade | default('') | length > 0 %}
+<br /><span style="color:#7b8794;font-size:12px;">Janela lida da atividade
+{% if link_jira | length > 0 %}<a href="{{ link_jira | e }}/browse/{{ g.atividade | e }}" style="color:{{ cor }};text-decoration:none;">{{ g.atividade | e }}</a>{% else %}{{ g.atividade | e }}{% endif %}
+</span>
+{% endif %}
 </td>
 </tr>
 {% if g.sistemas | default([]) | length > 0 %}

@@ -3,6 +3,16 @@
 # 1. Buscar atividades que estão aguardando aprovação
 # ============================================================
 
+- name: Validar a origem da janela de downtime (jira_janela_origem)
+  ansible.builtin.assert:
+    that:
+      - jira_janela_origem in ['atividade', 'gml_pai']
+    fail_msg: >-
+      jira_janela_origem="{{ jira_janela_origem }}" é inválido.
+      Use "atividade" (lê da atividade de Observabilidade) ou
+      "gml_pai" (lê da própria GMUD).
+    quiet: true
+
 - name: Buscar atividades de Observabilidade
   ansible.builtin.uri:
     url: "{{ jira_base_url }}/rest/api/3/search/jql"
@@ -26,6 +36,9 @@
         - summary
         - customfield_14998
         - issuelinks
+        # Janela de downtime: agora lida da ATIVIDADE (não mais da GMUD pai).
+        - "{{ jira_inicio_field }}"
+        - "{{ jira_fim_field }}"
     status_code: 200
   register: jira_search
   environment: "{{ proxy_env }}"
@@ -88,6 +101,47 @@
   ansible.builtin.set_fact:
     gmuds_pai: "{{ [jira_gml] if jira_gml in gmuds_pai else [] }}"
   when: jira_gml | default('') | length > 0
+
+# 3c. Janela de downtime: vem da ATIVIDADE de Observabilidade, não da GMUD pai.
+# Monta um dicionário  GML pai -> {atividade, inicio, fim, atividades}.
+# Se a mesma GMUD tiver mais de uma atividade de Observabilidade, vale a
+# primeira (menor chave) que tenha início E fim preenchidos; as demais só
+# entram na lista "atividades" para o aviso logo abaixo.
+- name: Ler a janela de downtime nas atividades
+  ansible.builtin.set_fact:
+    janelas_por_gmud: >-
+      {%- set r = namespace(d={}) -%}
+      {%- for a in atividades_observabilidade | sort(attribute='key') -%}
+      {%- set ini = a.fields[jira_inicio_field] | default(none) -%}
+      {%- set fim = a.fields[jira_fim_field] | default(none) -%}
+      {%- for l in a.fields.issuelinks | default([]) if l.inwardIssue is defined -%}
+      {%- set pai = l.inwardIssue.key -%}
+      {%- if pai not in r.d -%}
+      {%- set r.d = r.d | combine({pai: {'atividade': a.key, 'inicio': ini, 'fim': fim, 'atividades': [a.key]}}) -%}
+      {%- else -%}
+      {%- set atual = r.d[pai] -%}
+      {%- if (atual.inicio is none or atual.fim is none) and ini is not none and fim is not none -%}
+      {%- set r.d = r.d | combine({pai: {'atividade': a.key, 'inicio': ini, 'fim': fim, 'atividades': atual.atividades + [a.key]}}) -%}
+      {%- else -%}
+      {%- set r.d = r.d | combine({pai: {'atividade': atual.atividade, 'inicio': atual.inicio, 'fim': atual.fim, 'atividades': atual.atividades + [a.key]}}) -%}
+      {%- endif -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- endfor -%}
+      {{ r.d }}
+
+- name: Avisar GMUD com mais de uma atividade de Observabilidade
+  ansible.builtin.debug:
+    msg: >-
+      GMUD {{ item.key }} tem {{ item.value.atividades | length }} atividades de
+      {{ executante_alvo }} ({{ item.value.atividades | join(', ') }}).
+      A janela foi lida de {{ item.value.atividade }}.
+  loop: "{{ janelas_por_gmud | dict2items | selectattr('value.atividades', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when:
+    - jira_janela_origem == 'atividade'
+    - item.value.atividades | length > 1
 
 
 # ============================================================
@@ -154,8 +208,9 @@
           {
             'chave': item.json.key,
             'resumo': item.json.fields.summary,
-            'inicio': item.json.fields[jira_inicio_field],
-            'fim': item.json.fields[jira_fim_field],
+            'inicio': (item.json.fields[jira_inicio_field] | default(none)) if jira_janela_origem == 'gml_pai' else janelas_por_gmud.get(item.json.key, {}).get('inicio'),
+            'fim': (item.json.fields[jira_fim_field] | default(none)) if jira_janela_origem == 'gml_pai' else janelas_por_gmud.get(item.json.key, {}).get('fim'),
+            'atividade': '' if jira_janela_origem == 'gml_pai' else janelas_por_gmud.get(item.json.key, {}).get('atividade', ''),
             'ativos': (
               item.json.fields.customfield_14007
               | default([])

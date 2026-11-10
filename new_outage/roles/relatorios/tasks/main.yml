@@ -115,6 +115,7 @@
           'inicio': inicio_fmt,
           'fim': fim_fmt,
           'duracao_min': duracao_min,
+          'atividade': item.atividade | default(''),
           'sistemas': item.nome_cmdb | default([]),
           'servidores': item.ativos | default([]),
           'dynatrace': dyn,
