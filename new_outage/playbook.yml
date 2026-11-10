@@ -6,6 +6,7 @@
     TZ: "America/Sao_Paulo"
   vars:
     dynatrace_validate_only: true
+    zabbix_habilitado: false
 
   roles:
     # Cria o host virtual usado pelas tasks do Zabbix
