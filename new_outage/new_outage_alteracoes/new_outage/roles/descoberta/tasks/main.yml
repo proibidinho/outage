@@ -1,0 +1,208 @@
+---
+# ============================================================
+# 1. Buscar atividades que estão aguardando aprovação
+# ============================================================
+
+- name: Buscar atividades de Observabilidade
+  ansible.builtin.uri:
+    url: "{{ jira_base_url }}/rest/api/3/search/jql"
+    method: POST
+    force_basic_auth: true
+    user: "{{ jira_user }}"
+    password: "{{ jira_password }}"
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+    body_format: json
+    body:
+      jql: >-
+        project = {{ projeto_jira }}
+        AND (
+          status = "Pronto para Implementação"
+          OR status = "Atividade em execução"
+        )
+      maxResults: 1000
+      fields:
+        - summary
+        - customfield_14998
+        - issuelinks
+    status_code: 200
+  register: jira_search
+  environment: "{{ proxy_env }}"
+  no_log: false
+
+
+# ============================================================
+# 2. Filtrar somente as atividades de Observabilidade
+# ============================================================
+
+- name: Selecionar somente atividades de Observabilidade
+  ansible.builtin.set_fact:
+    atividades_observabilidade: >-
+      {{
+        jira_search.json.issues | default([])
+        | selectattr('fields.customfield_14998', 'defined')
+        | selectattr('fields.customfield_14998.value', 'defined')
+        | selectattr(
+            'fields.customfield_14998.value',
+            'equalto',
+            executante_alvo
+          )
+        | list
+      }}
+
+
+# ============================================================
+# 3. Descobrir as GMUDs pai
+# ============================================================
+
+- name: Identificar as GMUDs pai
+  ansible.builtin.set_fact:
+    gmuds_pai: >-
+      {{
+        atividades_observabilidade
+        | map(attribute='fields.issuelinks')
+        | flatten
+        | selectattr('inwardIssue', 'defined')
+        | map(attribute='inwardIssue.key')
+        | unique
+        | list
+      }}
+
+# 3b. Survey (opcional): restringir a UMA GML pai.
+# A GML informada continua precisando ser elegível (mesma regra de sempre);
+# a Survey só reduz a lista, nunca inclui uma GMUD que não seria processada.
+- name: Avisar quando a GML informada na Survey não é elegível
+  ansible.builtin.debug:
+    msg: >-
+      A GML {{ jira_gml }} não está entre as GMUDs elegíveis desta execução
+      (elegíveis: {{ gmuds_pai | join(', ') if gmuds_pai | length > 0 else 'nenhuma' }}).
+      Confira a chave e se existe atividade de {{ executante_alvo }} em
+      "Pronto para Implementação" ou "Atividade em execução" ligada a ela.
+      Nada será processado.
+  when:
+    - jira_gml | default('') | length > 0
+    - jira_gml | default('') not in gmuds_pai
+
+- name: Restringir o processamento à GML informada na Survey
+  ansible.builtin.set_fact:
+    gmuds_pai: "{{ [jira_gml] if jira_gml in gmuds_pai else [] }}"
+  when: jira_gml | default('') | length > 0
+
+
+# ============================================================
+# 4. Buscar os dados completos de cada GMUD
+# ============================================================
+
+- name: Consultar dados completos das GMUDs
+  ansible.builtin.uri:
+    url: "{{ jira_base_url }}/rest/api/3/issue/{{ item }}?fields=*all"
+    method: GET
+    force_basic_auth: true
+    user: "{{ jira_user }}"
+    password: "{{ jira_password }}"
+    headers:
+      Accept: application/json
+    status_code: 200
+  loop: "{{ gmuds_pai }}"
+  register: gmuds_jira
+  environment: "{{ proxy_env }}"
+  no_log: false
+  loop_control:
+    label: "{{ item }}"
+
+
+- name: Debug quantidade de ativos CMDB
+  ansible.builtin.debug:
+    msg:
+      gmud: "{{ item.json.key }}"
+      quantidade: "{{ item.json.fields.customfield_14007 | length }}"
+      ativos: "{{ item.json.fields.customfield_14007 }}"
+  loop: "{{ gmuds_jira.results }}"
+  loop_control:
+    label: "{{ item.json.key }}"
+# ============================================================
+# 5. Inicializar resultado
+# ============================================================
+
+- name: Inicializar lista de GMUDs
+  ansible.builtin.set_fact:
+    gmuds: []
+
+
+# ============================================================
+# 6. Extrair informações das GMUDs
+#
+# O campo customfield_16348 é ADF.
+#
+# Estrutura observada:
+#
+# content
+#   └── paragraph
+#         └── content
+#               ├── "Ativos Afetados:"
+#               └── " brwin0291"
+#
+# Primeiro montamos o texto de cada parágrafo.
+# ============================================================
+
+- name: Processar cada GMUD
+  ansible.builtin.set_fact:
+    gmuds: >-
+      {{
+        gmuds + [
+          {
+            'chave': item.json.key,
+            'resumo': item.json.fields.summary,
+            'inicio': item.json.fields[jira_inicio_field],
+            'fim': item.json.fields[jira_fim_field],
+            'ativos': (
+              item.json.fields.customfield_14007
+              | default([])
+              | map(attribute='objectId')
+              | list
+            )
+          }
+        ]
+      }}
+  loop: "{{ gmuds_jira.results }}"
+
+
+# ============================================================
+# 7. Validar resultado
+# ============================================================
+
+- name: Validar informações das GMUDs
+  ansible.builtin.assert:
+    that:
+      - item.inicio is defined
+      - item.inicio is not none
+      - item.fim is defined
+      - item.fim is not none
+      - item.ativos is defined
+      - item.ativos | length > 0
+    fail_msg: >-
+      A GMUD {{ item.chave }} não possui todos os dados necessários.
+      Início: {{ item.inicio | default('não informado') }}
+      Fim: {{ item.fim | default('não informado') }}
+      Ativos: {{ item.ativos | default([]) }}
+  loop: "{{ gmuds }}"
+  loop_control:
+    label: "{{ item.chave }}"
+
+
+# ============================================================
+# 8. Mostrar resultado da descoberta
+# ============================================================
+
+- name: Mostrar resultado da descoberta
+  ansible.builtin.debug:
+    msg:
+      gmud: "{{ item.chave }}"
+      resumo: "{{ item.resumo }}"
+      inicio: "{{ item.inicio }}"
+      fim: "{{ item.fim }}"
+      ativos: "{{ item.ativos }}"
+  loop: "{{ gmuds }}"
+  loop_control:
+    label: "{{ item.chave }}"

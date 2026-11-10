@@ -1,0 +1,328 @@
+{#-
+  Corpo HTML do relatório de Outages GMUD.
+
+  Dados consumidos (montados em tasks/main.yml):
+    outage_relatorio          lista por GMUD: chave, resumo, inicio, fim, duracao_min,
+                              sistemas, servidores, dynatrace{status,hosts_qtd,services_qtd},
+                              zabbix{status,hosts,faltando,esperados,minutos}
+    outage_planilha           linhas da planilha anexa (só a contagem é usada)
+    relatorio_modo_dynatrace  VALIDAÇÃO | APLICAÇÃO REAL
+    relatorio_modo_zabbix     DESABILITADO | VALIDAÇÃO | APLICAÇÃO REAL
+    relatorio_titulo / relatorio_cor / relatorio_link_jira / relatorio_max_ativos
+    ansible_date_time         (gather_facts)
+
+  Regras: CSS 100% inline (Outlook ignora <style>), layout em tabelas e todo
+  texto vindo de fora (Jira/CMDB) passa por | e, pois o Ansible não escapa HTML.
+-#}
+{%- macro badge(st) -%}
+{%- set mapa = {
+  'CRIADA':        ['#1b5e20', '#e3f4e6', 'CRIADA'],
+  'APLICADA':      ['#1b5e20', '#e3f4e6', 'APLICADA'],
+  'VALIDADO':      ['#0d47a1', '#e1effd', 'VALIDADO'],
+  'SEM_ALTERACAO': ['#3e4c59', '#e9edf2', 'SEM ALTERAÇÃO'],
+  'IGNORADA':      ['#8a4b00', '#fff0d1', 'IGNORADA'],
+  'DESABILITADO':  ['#5f6b7a', '#eef1f5', 'DESABILITADO'],
+  'SEM_DADOS':     ['#5f6b7a', '#eef1f5', 'SEM DADOS']
+} -%}
+{%- set c = mapa[st] if st in mapa else mapa['SEM_DADOS'] -%}
+<span style="display:inline-block;padding:3px 10px;border-radius:10px;background-color:{{ c[1] }};color:{{ c[0] }};font-size:11px;line-height:16px;font-weight:bold;letter-spacing:0.5px;white-space:nowrap;">{{ c[2] }}</span>
+{%- endmacro -%}
+{%- set fonte = "font-family:Arial,'Segoe UI',Helvetica,sans-serif;" -%}
+{%- set cabecalho = "background-color:#eef1f5;padding:8px 10px;border-bottom:1px solid #d5dae1;color:#3e4c59;font-weight:bold;font-size:12px;text-align:left;" -%}
+{%- set celula = "padding:8px 10px;border-bottom:1px solid #e4e7eb;color:#1f2933;font-size:13px;line-height:19px;word-break:break-word;" -%}
+{%- set rotulo = "padding:8px 10px;border-bottom:1px solid #e4e7eb;color:#5f6b7a;font-size:13px;line-height:19px;" -%}
+{%- set secao = "padding:20px 24px 8px 24px;font-size:12px;font-weight:bold;color:#5f6b7a;letter-spacing:1px;" -%}
+{%- set cor = relatorio_cor | default('#1565c0') -%}
+{%- set maxativos = relatorio_max_ativos | default(15) | int -%}
+{%- set link_jira = relatorio_link_jira | default('') -%}
+{%- set lista = outage_relatorio | default([]) -%}
+{%- set k = namespace(dyn_ok=0, zbx_ok=0, ignoradas=0, servidores=0, atencao=[]) -%}
+{%- for g in lista -%}
+{%- set dst = g.dynatrace.status | default('SEM_DADOS') -%}
+{%- set zst = g.zabbix.status | default('SEM_DADOS') -%}
+{%- set k.servidores = k.servidores + (g.servidores | default([]) | length) -%}
+{%- if dst in ['CRIADA', 'VALIDADO'] -%}{%- set k.dyn_ok = k.dyn_ok + 1 -%}{%- endif -%}
+{%- if zst in ['APLICADA', 'VALIDADO', 'SEM_ALTERACAO'] -%}{%- set k.zbx_ok = k.zbx_ok + 1 -%}{%- endif -%}
+{%- if dst == 'IGNORADA' or zst == 'IGNORADA' -%}
+{%- set plat = [] -%}
+{%- if dst == 'IGNORADA' -%}{%- set plat = plat + ['Dynatrace'] -%}{%- endif -%}
+{%- if zst == 'IGNORADA' -%}{%- set plat = plat + ['Zabbix'] -%}{%- endif -%}
+{%- set k.ignoradas = k.ignoradas + 1 -%}
+{%- set k.atencao = k.atencao + [g.chave ~ ' (' ~ (plat | join(' e ')) ~ ')'] -%}
+{%- endif -%}
+{%- endfor -%}
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="pt-BR">
+
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Relatório Outages GMUD</title>
+</head>
+
+<body style="margin:0;padding:0;background-color:#f2f4f7;">
+
+<div style="display:none;max-height:0;overflow:hidden;font-size:1px;line-height:1px;color:#f2f4f7;">
+{{ lista | length }} GMUD(s) processada(s) · Dynatrace: {{ relatorio_modo_dynatrace }} · Zabbix: {{ relatorio_modo_zabbix }}
+</div>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f2f4f7" style="background-color:#f2f4f7;">
+<tr>
+<td align="center" style="padding:20px 10px;">
+
+<!--[if mso]><table role="presentation" width="680" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff"
+       style="width:100%;max-width:680px;background-color:#ffffff;border:1px solid #d5dae1;{{ fonte }}">
+
+<!-- FAIXA DE TÍTULO -->
+<tr>
+<td bgcolor="{{ cor }}" style="background-color:{{ cor }};padding:16px 24px;{{ fonte }}">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+<tr>
+<td style="{{ fonte }}font-size:15px;font-weight:bold;color:#ffffff;letter-spacing:1px;">
+{{ relatorio_titulo | default('OUTAGE GMUD • OBSERVABILIDADE') | e }}
+</td>
+<td align="right" style="{{ fonte }}font-size:12px;color:#dbe7f7;white-space:nowrap;">
+{{ ansible_date_time.day }}/{{ ansible_date_time.month }}/{{ ansible_date_time.year }}
+</td>
+</tr>
+</table>
+</td>
+</tr>
+
+<!-- ABERTURA -->
+<tr>
+<td style="padding:22px 24px 4px 24px;{{ fonte }}font-size:15px;line-height:22px;color:#1f2933;">
+<b>Processamento concluído.</b><br />
+Segue o resultado das Maintenance Windows (Dynatrace) e Maintenances (Zabbix) por GMUD.
+A planilha com todos os ativos segue em anexo.
+</td>
+</tr>
+
+<!-- MODOS DE EXECUÇÃO -->
+<tr>
+<td style="padding:10px 24px 0 24px;{{ fonte }}font-size:13px;line-height:24px;color:#3e4c59;">
+<b>Dynatrace:</b>
+{% if relatorio_modo_dynatrace == 'VALIDAÇÃO' %}
+<span style="color:#0d47a1;font-weight:bold;">VALIDAÇÃO</span> — nenhuma janela foi criada
+{% else %}
+<span style="color:#1b5e20;font-weight:bold;">APLICAÇÃO REAL</span>
+{% endif %}
+&nbsp;&nbsp;|&nbsp;&nbsp;
+<b>Zabbix:</b>
+{% if relatorio_modo_zabbix == 'DESABILITADO' %}
+<span style="color:#5f6b7a;font-weight:bold;">DESABILITADO</span> nesta execução
+{% elif relatorio_modo_zabbix == 'VALIDAÇÃO' %}
+<span style="color:#0d47a1;font-weight:bold;">VALIDAÇÃO</span> — nenhuma maintenance foi criada
+{% else %}
+<span style="color:#1b5e20;font-weight:bold;">APLICAÇÃO REAL</span>
+{% endif %}
+{% if (jira_gml | default('')) | length > 0 %}
+<br /><b>Execução individual:</b> GML {{ jira_gml | e }}
+{% endif %}
+</td>
+</tr>
+
+<!-- RESUMO -->
+<tr>
+<td style="{{ secao }}{{ fonte }}">RESUMO</td>
+</tr>
+
+<tr>
+<td style="padding:0 24px 6px 24px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:separate;">
+<tr>
+{%- for rot, val, cx in [
+  ('GMUDs', lista | length, '#1f2933'),
+  ('Dynatrace OK', k.dyn_ok, '#1b5e20'),
+  ('Zabbix OK', k.zbx_ok, '#1b5e20'),
+  ('Com pendência', k.ignoradas, ('#8a4b00' if k.ignoradas > 0 else '#7b8794'))
+] %}
+<td width="25%" align="center" valign="top" style="width:25%;padding:12px 4px;background-color:#f7f9fc;border:1px solid #e4e7eb;{{ fonte }}">
+<div style="font-size:26px;line-height:30px;font-weight:bold;color:{{ cx }};">{{ val }}</div>
+<div style="font-size:11px;line-height:16px;color:#5f6b7a;letter-spacing:0.5px;">{{ rot | upper }}</div>
+</td>
+{%- endfor %}
+</tr>
+</table>
+</td>
+</tr>
+
+<tr>
+<td style="padding:6px 24px 0 24px;{{ fonte }}font-size:12px;line-height:18px;color:#7b8794;">
+{{ k.servidores }} servidor(es) no total · {{ outage_planilha | default([]) | length }} linha(s) na planilha anexa
+</td>
+</tr>
+
+{% if k.ignoradas > 0 %}
+<!-- ATENÇÃO -->
+<tr>
+<td style="padding:14px 24px 0 24px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+<tr>
+<td bgcolor="#fff7e6" style="background-color:#fff7e6;border-left:4px solid #e08a00;padding:10px 14px;{{ fonte }}font-size:13px;line-height:20px;color:#5c3b00;">
+<b>Atenção:</b> {{ k.ignoradas }} GMUD(s) sem janela/maintenance em ao menos uma plataforma
+porque ativos não foram localizados: {{ k.atencao | join(', ') | e }}.
+</td>
+</tr>
+</table>
+</td>
+</tr>
+{% endif %}
+
+{% if lista | length == 0 %}
+<tr>
+<td style="padding:22px 24px 8px 24px;{{ fonte }}font-size:14px;line-height:22px;color:#3e4c59;">
+{% if (jira_gml | default('')) | length > 0 %}
+A GML {{ jira_gml | e }} não está entre as GMUDs elegíveis desta execução. Confira a chave e se há atividade de
+Observabilidade em "Pronto para Implementação" ou "Atividade em execução" ligada a ela.
+{% else %}
+Nenhuma GMUD de Observabilidade elegível foi encontrada nesta execução.
+{% endif %}
+</td>
+</tr>
+{% endif %}
+
+{% for g in lista %}
+{% set dyn = g.dynatrace | default({}) %}
+{% set zbx = g.zabbix | default({}) %}
+{% set dst = dyn.status | default('SEM_DADOS') %}
+{% set zst = zbx.status | default('SEM_DADOS') %}
+{% set servidores = g.servidores | default([]) %}
+
+<!-- GMUD {{ g.chave | e }} -->
+<tr>
+<td style="padding:22px 24px 8px 24px;{{ fonte }}">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+<tr>
+<td valign="top" style="{{ fonte }}font-size:12px;font-weight:bold;color:#5f6b7a;letter-spacing:1px;white-space:nowrap;padding-right:8px;">
+GMUD
+{% if link_jira | length > 0 %}
+<a href="{{ link_jira | e }}/browse/{{ g.chave | e }}" style="color:{{ cor }};text-decoration:none;">{{ g.chave | e }}</a>
+{% else %}
+{{ g.chave | e }}
+{% endif %}
+</td>
+<td align="right" valign="top" style="{{ fonte }}line-height:24px;">
+<span style="font-size:11px;font-weight:normal;color:#7b8794;">Dynatrace</span>&nbsp;{{ badge(dst) }}&nbsp;&nbsp;<span style="font-size:11px;font-weight:normal;color:#7b8794;">Zabbix</span>&nbsp;{{ badge(zst) }}
+</td>
+</tr>
+</table>
+</td>
+</tr>
+
+<tr>
+<td style="padding:0 24px 6px 24px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;{{ fonte }}">
+<tr>
+<td width="130" valign="top" style="width:130px;{{ rotulo }}">Resumo</td>
+<td valign="top" style="{{ celula }}">{{ g.resumo | default('') | e }}</td>
+</tr>
+<tr>
+<td width="130" valign="top" style="width:130px;{{ rotulo }}">Janela</td>
+<td valign="top" style="{{ celula }}">
+{{ g.inicio | default('') | e }} &rarr; {{ g.fim | default('') | e }}
+{% if g.duracao_min | default('') != '' %}
+<span style="color:#7b8794;">
+({{ (g.duracao_min | int) // 60 }}h{{ '%02d' | format((g.duracao_min | int) % 60) }}min)
+</span>
+{% endif %}
+</td>
+</tr>
+{% if g.sistemas | default([]) | length > 0 %}
+<tr>
+<td width="130" valign="top" style="width:130px;{{ rotulo }}">Sistema(s) CMDB</td>
+<td valign="top" style="{{ celula }}">{{ g.sistemas | join(', ') | e }}</td>
+</tr>
+{% endif %}
+<tr>
+<td width="130" valign="top" style="width:130px;{{ rotulo }}">Servidores ({{ servidores | length }})</td>
+<td valign="top" style="{{ celula }}">
+{{ servidores[:maxativos] | join(', ') | e }}
+{% if servidores | length > maxativos %}
+<span style="color:#7b8794;">… e mais {{ servidores | length - maxativos }} (lista completa na planilha)</span>
+{% endif %}
+</td>
+</tr>
+</table>
+</td>
+</tr>
+
+<tr>
+<td style="padding:6px 24px 6px 24px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;{{ fonte }}">
+
+<tr>
+<td style="{{ cabecalho }}">Resultado por plataforma</td>
+</tr>
+
+<tr>
+<td valign="top" style="{{ celula }}">
+<b>Dynatrace</b>&nbsp;&nbsp;{{ badge(dst) }}<br />
+<span style="color:#3e4c59;">
+{% if dst == 'CRIADA' %}
+Maintenance Window "GMUD {{ g.chave | e }}" criada.
+{{ dyn.hosts_qtd | default(0) }} HOST(s) · {{ dyn.services_qtd | default(0) }} SERVICE(s).
+{% elif dst == 'VALIDADO' %}
+Payload validado; nenhuma janela foi criada.
+{{ dyn.hosts_qtd | default(0) }} HOST(s) · {{ dyn.services_qtd | default(0) }} SERVICE(s).
+{% elif dst == 'IGNORADA' %}
+Nenhum HOST ou SERVICE encontrado no Dynatrace; nenhuma janela foi criada.
+{% else %}
+Sem informação desta plataforma.
+{% endif %}
+</span>
+</td>
+</tr>
+
+<tr>
+<td valign="top" style="{{ celula }}">
+<b>Zabbix</b>&nbsp;&nbsp;{{ badge(zst) }}<br />
+<span style="color:#3e4c59;">
+{% if zst == 'APLICADA' %}
+Maintenance "GMUD {{ g.chave | e }}" criada/atualizada. {{ zbx.hosts | default([]) | length }} host(s).
+{% elif zst == 'SEM_ALTERACAO' %}
+Maintenance já existente, sem alterações. {{ zbx.hosts | default([]) | length }} host(s).
+{% elif zst == 'VALIDADO' %}
+Validado; nenhuma maintenance foi criada. {{ zbx.hosts | default([]) | length }} host(s).
+{% elif zst == 'IGNORADA' %}
+{{ zbx.hosts | default([]) | length }} de {{ zbx.esperados | default(servidores | length) }} host(s) encontrado(s);
+nenhuma maintenance foi criada.
+{% if zbx.faltando | default([]) | length > 0 %}
+<br /><span style="color:#8a4b00;">Não encontrados: {{ zbx.faltando[:maxativos] | join(', ') | e }}{% if zbx.faltando | length > maxativos %} … e mais {{ zbx.faltando | length - maxativos }}{% endif %}</span>
+{% endif %}
+{% elif zst == 'DESABILITADO' %}
+Zabbix desabilitado nesta execução.
+{% else %}
+Sem informação desta plataforma.
+{% endif %}
+</span>
+</td>
+</tr>
+
+</table>
+</td>
+</tr>
+
+{% endfor %}
+
+<!-- RODAPÉ -->
+<tr>
+<td style="padding:22px 24px 22px 24px;{{ fonte }}font-size:12px;line-height:18px;color:#7b8794;border-top:1px solid #e4e7eb;">
+Gerado em {{ ansible_date_time.day }}/{{ ansible_date_time.month }}/{{ ansible_date_time.year }}
+às {{ ansible_date_time.hour }}:{{ ansible_date_time.minute }}.<br />
+Este é um e-mail automático gerado pela automação de Outages Jira → Dynatrace / Zabbix.
+</td>
+</tr>
+
+</table>
+<!--[if mso]></td></tr></table><![endif]-->
+
+</td>
+</tr>
+</table>
+
+</body>
+</html>

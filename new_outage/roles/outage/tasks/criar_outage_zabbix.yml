@@ -59,6 +59,20 @@
         )
       }}
 
+# Ativos da GMUD que NÃO foram achados no Zabbix (sem diferenciar
+# maiúsculas/minúsculas). Só informativo: alimenta o log e o relatório.
+- name: Identificar ativos não encontrados no Zabbix
+  ansible.builtin.set_fact:
+    zbx_faltando: >-
+      {%- set achados = zbx_hosts | map('lower') | list -%}
+      {%- set r = namespace(lista=[]) -%}
+      {%- for a in gmud.ativos -%}
+      {%- if (a | lower) not in achados -%}
+      {%- set r.lista = r.lista + [a] -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ r.lista }}
+
 - name: Definir se a GMUD é válida para o Zabbix
   ansible.builtin.set_fact:
     gmud_valida_zabbix: "{{ zbx_hosts | length == gmud.ativos | length }}"
@@ -68,7 +82,8 @@
     msg: >-
       GMUD {{ gmud.chave }} ignorada no Zabbix: esperados
       {{ gmud.ativos | length }} ativos, encontrados {{ zbx_hosts | length }}
-      ({{ zbx_hosts | join(', ') }}). Nenhuma maintenance será criada.
+      ({{ zbx_hosts | join(', ') }}). Não encontrados:
+      {{ zbx_faltando | join(', ') }}. Nenhuma maintenance será criada.
   when: not gmud_valida_zabbix
 
 - name: Mostrar o que será colocado em manutenção no Zabbix
@@ -90,7 +105,7 @@
       Outage automático para a GMUD {{ gmud.chave }} - {{ gmud.resumo }}
     host_names: "{{ zbx_hosts }}"
     visible_name: "{{ zabbix_usar_visible_name }}"
-    collect_data: "{{ zabbix_collect_data }}"
+    collect_data: "{{ zabbix_collect_data | default(omit) }}"
     active_since: "{{ zbx_inicio }}"
     active_till: "{{ zbx_fim }}"
     minutes: "{{ zbx_minutos }}"
@@ -99,7 +114,7 @@
   register: zbx_maintenance
   when:
     - gmud_valida_zabbix
-    - not zabbix_validate_only
+    - not (zabbix_validate_only | bool)
 
 - name: Informar resultado do Zabbix
   ansible.builtin.debug:
@@ -108,7 +123,35 @@
       resultado: >-
         {{
           'VALIDAÇÃO OK - nenhuma maintenance foi criada'
-          if zabbix_validate_only
+          if zabbix_validate_only | bool
           else 'Maintenance criada/atualizada no Zabbix'
         }}
   when: gmud_valida_zabbix
+
+# Guarda o desfecho desta GMUD no Zabbix para o relatório por e-mail.
+# Só registra: não chama API nem altera nada.
+#   IGNORADA       algum ativo não existe no Zabbix (nada criado)
+#   VALIDADO       modo de teste (nada criado)
+#   APLICADA       maintenance criada ou atualizada
+#   SEM_ALTERACAO  maintenance já existia idêntica
+- name: Registrar resultado do Zabbix para o relatório
+  ansible.builtin.set_fact:
+    outage_zabbix_resultado: >-
+      {{
+        (outage_zabbix_resultado | default([]))
+        +
+        [{
+          'chave': gmud.chave,
+          'status': status_zbx,
+          'hosts': zbx_hosts,
+          'faltando': zbx_faltando,
+          'esperados': gmud.ativos | length,
+          'minutos': zbx_minutos | int
+        }]
+      }}
+  vars:
+    status_zbx: >-
+      {{ 'IGNORADA' if not (gmud_valida_zabbix | bool)
+         else 'VALIDADO' if zabbix_validate_only | bool
+         else 'APLICADA' if (zbx_maintenance.changed | default(false))
+         else 'SEM_ALTERACAO' }}

@@ -1,0 +1,1413 @@
+
+
+========================================
+ARQUIVO: new_outage/group_vars/all.yml
+========================================
+
+$ANSIBLE_VAULT;1.1;AES256
+39663261613662306235633232613331396232633238333636373833303431326162333530663234
+3764656663366535336336333462623830643064633363650a303566393561326264313166633434
+34353964353137643233653835613032313162653562306266373864353562666337353937663734
+6431313466333265320a316434303933303632623361663836313762613436346137306163643537
+36343839393430643631313662323163333865613164303965646163353334643934636263633064
+38366264393435386662663235623832613330616631386137336566623432656638303437333139
+33363231393832616436663633633364663436633230643135303237626138323130343463303733
+65653465353261613831333832666264393733313631353732326337346439326263636232383335
+38356336643363353836386466316366616630386234356632356661376534626266623964633264
+35333239666339363861333031333138636161663338356162646637323764306631653031396637
+34616336613964383536643664383433313834613063653437643136666463303866313764326562
+62643637383764306338393664306166623233393138653566313034366132383533326562663663
+65366132333033343536663537613932386136336162306364636334373566623666393534373631
+63333533636136633034383337323665306132383230633234646561653839363135363539373731
+63353234356664353666643331323130643962393461343135363836316233653933613430616236
+32633435396566346331636566326166363936363263363964373834363764353739376130303139
+31386663613666356238363732343833653530333934636533663562323930353737663134393530
+34313336313434613333653661366237373165623038356561363332306562376139636636656235
+37656565333833383463666139323438616435623033663961346630396636656265343037653035
+65653261383638646335643764363461363262383338323333346630383837386365653630356538
+30316664343364356362653435343261336561656532663438313732313030353964326132653430
+36383464653465383630363134353430303266386131373336336263373866396431356561356635
+39643962366665393038353039383436396364363934386439623131623663623861613066306639
+61643132376362343739336139336231633266393430303530363930383830323831373461343531
+63346138643661666232376661346664306637303037313231383630326139653264643239306434
+65383738313239303833386437316334333061623465653965666261313766653635373163666562
+63366466393334613438613361643639613962366235326334643165313765623235333161306130
+33346131396434383061636137663237636130303539343130643764616632646531356336333136
+63313534333835643432613030336238333665323665383434313439373666343738653838613966
+64393836663139396535323337316135643465376666333136373938633261666563633665653538
+32326636356233353065626236643034353435396462323633386430613565646362653664326234
+33613163646636303765343737636365336336303435323139636232373861336366633065333265
+35336130333262343666323734623361393339653264643765306366613766363930303663363361
+35653535303235383663353561356432383166313931613535346238366231616336376231356235
+63613166333139643161393262336439663965316136366530343039633964396533653636333436
+31333532616163633662313633613737626166343765306436316138356264353033643230613336
+35663437363534343665623736623137633364343537613962373432343362336131653762623434
+39383033333462363737343131353238613835623434376263366163623466616439333663303565
+66663130323264623961333933316635653764633666613134363137653937313864633032323965
+32643037653935663436383565326234313932313564383239373762333133383332386161316632
+61626538623065316665376463643239663232323265646238663561616637306433643239303634
+62616539316139316261663038396564336533616465656130653233306639356432643637613132
+31333433336230363964323532376439663135333638366135363739393635363835336632646439
+35356233633731383662623839353030616162353162613166323138353564356234383138383165
+37326136333265636563326138366336343164643239326433396464323430333734333863316563
+63316637393962393462653939313534316464313139336630643936336435623366353135333638
+36396566366334656131623364313537613636623162626665373164353438323433346131653032
+66326239626130653464663032656630633764383831646430613263343533323430636436316337
+64636161373665373432396131383536363764333432633763303734383762363332333233366135
+32643039613033333230656333653539333538366530313331303730656632653866333035623635
+63313433303734316564363235346536343236363430383732393637333863346661313666396339
+30303462373635386564626165356439633866343137323466366238646131653339333538323333
+39636265653933313236643734626362393165633663623633393362343665613836396132643532
+66663435323837656264346565633938643330393838303234626364633461633366616662613032
+36366265323235336532373639663233373666393935656166353234306338646262653630663063
+66396663343234353035393233336161323636356264376437313665343431313935613038623238
+38663037323164383365336165313963643866343166333934353066333630623636333331633137
+35663336366138373566356136623138666535323165313739646539623361396538323163333034
+32613762623161653637643430633932313538373531653365363837386537613130363033306538
+36616138313939626366653236396264316532356537373763393937313164336237653737656236
+66313332343462313435383464653361643831333635356636313238613066336134363735316536
+65323632613661336239343537313566363732386236353437333332616661663839383961356631
+37383664663962616363353334376464653365393030323163633035313863303963343837303235
+36353066333237613537383739666434356533336337393063633337333661636636383632363432
+37623637303939363763336235623432616639303739653762393965323434383531386337333965
+63313266653936363732363265623165663436633532386532666566353561323933396464346436
+33663232316234333965323034373638623432666238356632363434333462363931633065626663
+33306136613032653433623733363537323639666263323939326530333166326430383133646430
+38326161363734383338666530363166373866326130346330303139613462653033346631363066
+32386263396231616534306131343333656664623736653562633331376539656630613663666632
+63323263323230643165386663623535303330356338633838386332666432633736613531663864
+36666563356362366439383166323963623863326466356238633665623531356463386262353338
+63313334303562393365313766623563616331366234343166313564353237343666373937336465
+39616166623866663635373737663339353164613534336232653734303038633162326364643333
+32303165396538323039336435316636393561613136316437633034333237643132353238346261
+61323239643061383133353738643164373166383836393531313034353531646438353130653839
+32386534363134336464613837363632363531373138643037386534333131313462386230623764
+61656265636335306338346436376131646266346263313465383239393032353037613838373932
+37666531316238636464363936353932636238336238643064363764663066636139366235646633
+66326531376437316330333233333861363730663435366239653931653261323239316364656338
+30303365613039343363616331646463343136356231373733663335656430363037646662613039
+34336332343532626630643363643065306330383636613932353234333663623566633235343039
+39666630363632316139363030666138303762636563633363636439313531643731333439323031
+33663536616430666133336639646663363531643236373538626238343866303765353733623737
+31333232636636626234643433353933656461303133323938303938613461616539313930383364
+39356465343734393739663765306239353238663661643334363436353463653534613663653738
+63633834626562386633383139643332306239646639316134646463313166346666353236326166
+37646333643533383333326338636265336361353833333031663334663330353233633136313937
+39313065373364383238623538353132663734633066313233316666323561306362326239366632
+33373930326336373031616138306463383636303366626435373030323764353166313865373163
+64616638333831346530656337623436383730613137643839316630383862633638353362346439
+35356338643535626665663532363431323865386334343037656434396262373163363535353031
+63363532303539323562626231623061313963633133383433376439653139373131633066396436
+61633463336661613733633765343638323465643033313964386664353365653361363766653835
+66393039386333656130656261616531333337366535333434653035373533336665333937633232
+32303261613663343762633934303537316264623261646430613235343233626239383330303633
+37653662336332343733313735353332663462383464616530633263623536343634343138333933
+34623731663137306134353664333930666464396131396135333137663261373761616136356636
+30643231613362383262633265643366653861363833613065633461623062386533356230303338
+30613936633237626266653333356666346331626239363061366534333365363162616330363937
+34646664623830623332613662323035306364366632383832383038366334393564353561656132
+36633365386430633734366466356631393838393730653762306334663530323934656563313736
+65383839393061366532366565623538616366373566373566616334353935643532393739386239
+33313637623163303166373664663732653835633765613536393034393563306333666434366639
+36373936346666613930666131626636393030623434633136323861633736383530656466636634
+30326237333961393336363930646433656237663533646265353839316537393032633266393665
+64346162363333366338343633343635613762656139666665376234306331353239346435393339
+63376530313062356132353539333839653231613463613661623139663530346533383364656663
+30323962363061313562353662316362366162303836333137373333616237303531666132306537
+3137366532633335643964373961343133353634626162633239
+
+========================================
+ARQUIVO: new_outage/playbook.yml
+========================================
+
+---
+- name: Auto Outage GML Observabilidade
+  hosts: localhost
+  gather_facts: true
+  environment:
+    TZ: "America/Sao_Paulo"
+  vars:
+    dynatrace_validate_only: true
+    zabbix_habilitado: false
+
+  roles:
+    # Cria o host virtual usado pelas tasks do Zabbix
+    - role: inventory
+    
+    # Descobre as GMUDs, ativos afetados e janela de manutenção no Jira.
+    - role: descoberta
+
+    # Localiza os ativos no Dynatrace e cria a Maintenance Window.
+    - role: outage
+
+    # Envia o relatorio
+    - role: relatorios
+
+========================================
+ARQUIVO: new_outage/README.md
+========================================
+
+# 🚨 Auto Outage GMUD Observabilidade
+
+> **Objetivo:** automatizar a criação de **Maintenance Windows no Dynatrace** e **Maintenances no Zabbix** a partir de GMUDs aprovadas para o time de Observabilidade, eliminando atividades manuais e aumentando a rastreabilidade operacional.
+
+https://img.shields.io/badge/status-ativo-brightgreen
+https://img.shields.io/badge/automation-AAP-red
+https://img.shields.io/badge/monitoring-Dynatrace-orange
+https://img.shields.io/badge/monitoring-Zabbix-red
+https://img.shields.io/badge/ITSM-Jira-blue
+
+---
+
+# 🧭 Em poucas palavras
+
+O projeto identifica automaticamente GMUDs que possuem atividades de aprovação para o grupo:
+
+```text
+OBSERVABILIDADE(APR)
+```
+
+A partir dessas GMUDs, a automação:
+
+✅ Descobre os ativos vinculados na CMDB
+
+✅ Localiza os servidores relacionados
+
+✅ Busca os respectivos HOSTs e SERVICEs no Dynatrace
+
+✅ Cria uma única Maintenance Window contendo todos os componentes encontrados
+
+✅ Cria a Maintenance correspondente no Zabbix
+
+✅ Gera uma planilha detalhada com todos os ativos processados
+
+✅ Envia relatório por e-mail
+
+---
+
+# 🔄 Fluxo simplificado
+
+```text
+Jira GMUD
+    │
+    ▼
+Role Descoberta
+    │
+    ▼
+Assets / CMDB
+    │
+    ▼
+Expansão dos ativos
+    │
+    ├────────► Dynatrace
+    │             │
+    │             ├─ HOSTs
+    │             └─ SERVICEs
+    │
+    └────────► Zabbix
+                    │
+                    └─ Maintenances
+    │
+    ▼
+Relatório Excel
+    │
+    ▼
+E-mail
+```
+
+---
+
+# 📋 O que a automação faz
+
+## 1️⃣ Descobre GMUDs elegíveis
+
+A automação consulta o Jira procurando atividades com status:
+
+```text
+Aguardando aprovação dos Executantes
+```
+
+e executante:
+
+```text
+OBSERVABILIDADE(APR)
+```
+
+A partir dessas atividades, identifica automaticamente a GMUD pai relacionada.
+
+---
+
+## 2️⃣ Obtém os ativos da CMDB
+
+Cada GMUD possui um campo:
+
+```text
+customfield_14007
+```
+
+que referencia objetos do Jira Assets.
+
+A automação suporta:
+
+### ✅ Um ativo
+
+Exemplo:
+
+```text
+P00PP4
+```
+
+### ✅ Vários ativos
+
+Exemplo:
+
+```text
+PS8
+FachadaSOACRM
+```
+
+### ✅ Objeto do tipo Sistema
+
+```text
+Sistema
+ ├─ srv01
+ ├─ srv02
+ └─ srv03
+```
+
+### ✅ Objeto do tipo Servidor
+
+```text
+NET002PRDSAS025
+```
+
+---
+
+## 3️⃣ Busca os ativos no Dynatrace
+
+Após expandir a CMDB, a automação procura:
+
+### HOSTs
+
+Utilizando os nomes dos servidores.
+
+Exemplo:
+
+```text
+NET002PRDLNX395
+BRUX0206
+ECC05CASDB02
+```
+
+---
+
+### SERVICEs
+
+Utilizando o nome do sistema CMDB.
+
+Exemplo:
+
+```text
+GITLAB
+P00PP4
+MPE
+```
+
+---
+
+## 4️⃣ Cria uma única Maintenance Window
+
+Todos os componentes encontrados são consolidados.
+
+Exemplo:
+
+```text
+HOST-123
+HOST-456
+SERVICE-ABC
+SERVICE-DEF
+```
+
+Resultado:
+
+```text
+1 GMUD
+1 Maintenance Window
+N HOSTs
+N SERVICEs
+```
+
+---
+
+## 5️⃣ Cria Maintenance no Zabbix
+
+Quando habilitado:
+
+```yaml
+zabbix_habilitado: true
+```
+
+a automação também cria a manutenção correspondente no Zabbix.
+
+A busca dos hosts é case-insensitive através de consultas em:
+
+```text
+UPPER
+LOWER
+```
+
+para aumentar a taxa de sucesso.
+
+---
+
+# 📊 Relatório Excel
+
+Ao final da execução é gerada uma planilha Excel contendo todos os ativos relacionados às GMUDs processadas.
+
+## Estrutura
+
+| Coluna | Conteúdo |
+|----------|----------|
+| A | GML |
+| B | Ativo |
+| C | Tipo |
+| D | Início |
+| E | Fim |
+
+---
+
+## Exemplo
+
+```text
+GML-171661 | NET002PRDLNX395            | HOST
+GML-171661 | BRUX1696                   | HOST
+GML-171661 | SERVICE-219C556A892645F5   | SERVICE
+GML-171661 | SERVICE-E3D067EED7B24615   | SERVICE
+```
+
+---
+
+# 📧 E-mail automático
+
+Ao término da execução é enviado um e-mail contendo:
+
+- Quantidade de GMUDs processadas
+- Quantidade de ativos encontrados
+- Planilha Excel em anexo
+- Resumo da execução
+
+---
+
+# 🧪 Modo de teste
+
+Para validar a automação sem criar uma Maintenance Window real:
+
+```yaml
+dynatrace_validate_only: true
+```
+
+Nesse modo:
+
+✅ Busca ativos
+
+✅ Busca HOSTs
+
+✅ Busca SERVICEs
+
+✅ Valida payload
+
+✅ Gera relatório
+
+❌ Não cria Maintenance Window
+
+---
+
+# 🧪 Teste sem GMUD real
+
+Caso não existam GMUDs abertas, é possível utilizar uma GMUD fictícia.
+
+Arquivo:
+
+```text
+roles/outage/vars/main.yml
+```
+
+Exemplo:
+
+```yaml
+gmuds:
+  - chave: "GML-TESTE"
+    resumo: "Teste Dynatrace"
+    inicio: "2026-09-18T18:08:00.000-0300"
+    fim: "2026-09-18T19:10:00.000-0300"
+    ativos:
+      - "901269"
+```
+
+Para esse cenário basta comentar a role:
+
+```yaml
+# - role: descoberta
+```
+
+no playbook principal.
+
+---
+
+# ⚙️ Roles do projeto
+
+## 📂 inventory
+
+Responsável por:
+
+- Registrar host virtual do Zabbix
+- Validar parâmetros de acesso
+- Preparar conexão API
+
+---
+
+## 📂 descoberta
+
+Responsável por:
+
+- Consultar Jira
+- Descobrir GMUDs pai
+- Obter datas da janela
+- Obter ativos vinculados
+
+---
+
+## 📂 outage
+
+Responsável por:
+
+- Consultar CMDB
+- Expandir ativos
+- Buscar HOSTs
+- Buscar SERVICEs
+- Criar Maintenance Window Dynatrace
+- Criar Maintenance Zabbix
+
+---
+
+## 📂 relatorios
+
+Responsável por:
+
+- Consolidar dados
+- Gerar Excel
+- Enviar e-mail
+- Produzir rastreabilidade operacional
+
+---
+
+# 🚨 Problemas comuns
+
+| Sintoma | Verificar |
+|----------|----------|
+| Nenhuma GMUD encontrada | Status da atividade |
+| Nenhum ativo encontrado | customfield_14007 |
+| Nenhum HOST encontrado | Nome do servidor no Dynatrace |
+| Nenhum SERVICE encontrado | Nome do sistema CMDB |
+| Maintenance não criada | dynatrace_validate_only |
+| Host não encontrado no Zabbix | Cadastro do host |
+| E-mail sem anexo | Caminho da planilha |
+
+---
+
+# ✅ Resultado esperado
+
+Ao final da execução o processo entrega:
+
+```text
+GMUD
+  ↓
+CMDB
+  ↓
+HOSTs
+  ↓
+SERVICEs
+  ↓
+Dynatrace
+  ↓
+Zabbix
+  ↓
+Excel
+  ↓
+E-mail
+```
+
+Tudo de forma automática, auditável e sem intervenção manual.
+
+========================================
+ARQUIVO: new_outage/roles/descoberta/tasks/main.yml
+========================================
+
+---
+# ============================================================
+# 1. Buscar atividades que estão aguardando aprovação
+# ============================================================
+
+- name: Buscar atividades de Observabilidade
+  ansible.builtin.uri:
+    url: "{{ jira_base_url }}/rest/api/3/search/jql"
+    method: POST
+    force_basic_auth: true
+    user: "{{ jira_user }}"
+    password: "{{ jira_password }}"
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+    body_format: json
+    body:
+      jql: >-
+        project = {{ projeto_jira }}
+        AND (
+          status = "Pronto para Implementação"
+          OR status = "Atividade em execução"
+        )
+      maxResults: 1000
+      fields:
+        - summary
+        - customfield_14998
+        - issuelinks
+    status_code: 200
+  register: jira_search
+  environment: "{{ proxy_env }}"
+  no_log: false
+
+
+# ============================================================
+# 2. Filtrar somente as atividades de Observabilidade
+# ============================================================
+
+- name: Selecionar somente atividades de Observabilidade
+  ansible.builtin.set_fact:
+    atividades_observabilidade: >-
+      {{
+        jira_search.json.issues | default([])
+        | selectattr('fields.customfield_14998', 'defined')
+        | selectattr('fields.customfield_14998.value', 'defined')
+        | selectattr(
+            'fields.customfield_14998.value',
+            'equalto',
+            executante_alvo
+          )
+        | list
+      }}
+
+
+# ============================================================
+# 3. Descobrir as GMUDs pai
+# ============================================================
+
+- name: Identificar as GMUDs pai
+  ansible.builtin.set_fact:
+    gmuds_pai: >-
+      {{
+        atividades_observabilidade
+        | map(attribute='fields.issuelinks')
+        | flatten
+        | selectattr('inwardIssue', 'defined')
+        | map(attribute='inwardIssue.key')
+        | unique
+        | list
+      }}
+
+
+# ============================================================
+# 4. Buscar os dados completos de cada GMUD
+# ============================================================
+
+- name: Consultar dados completos das GMUDs
+  ansible.builtin.uri:
+    url: "{{ jira_base_url }}/rest/api/3/issue/{{ item }}?fields=*all"
+    method: GET
+    force_basic_auth: true
+    user: "{{ jira_user }}"
+    password: "{{ jira_password }}"
+    headers:
+      Accept: application/json
+    status_code: 200
+  loop: "{{ gmuds_pai }}"
+  register: gmuds_jira
+  environment: "{{ proxy_env }}"
+  no_log: false
+  loop_control:
+    label: "{{ item }}"
+
+
+- name: Debug quantidade de ativos CMDB
+  ansible.builtin.debug:
+    msg:
+      gmud: "{{ item.json.key }}"
+      quantidade: "{{ item.json.fields.customfield_14007 | length }}"
+      ativos: "{{ item.json.fields.customfield_14007 }}"
+  loop: "{{ gmuds_jira.results }}"
+  loop_control:
+    label: "{{ item.json.key }}"
+# ============================================================
+# 5. Inicializar resultado
+# ============================================================
+
+- name: Inicializar lista de GMUDs
+  ansible.builtin.set_fact:
+    gmuds: []
+
+
+# ============================================================
+# 6. Extrair informações das GMUDs
+#
+# O campo customfield_16348 é ADF.
+#
+# Estrutura observada:
+#
+# content
+#   └── paragraph
+#         └── content
+#               ├── "Ativos Afetados:"
+#               └── " brwin0291"
+#
+# Primeiro montamos o texto de cada parágrafo.
+# ============================================================
+
+- name: Processar cada GMUD
+  ansible.builtin.set_fact:
+    gmuds: >-
+      {{
+        gmuds + [
+          {
+            'chave': item.json.key,
+            'resumo': item.json.fields.summary,
+            'inicio': item.json.fields[jira_inicio_field],
+            'fim': item.json.fields[jira_fim_field],
+            'ativos': (
+              item.json.fields.customfield_14007
+              | default([])
+              | map(attribute='objectId')
+              | list
+            )
+          }
+        ]
+      }}
+  loop: "{{ gmuds_jira.results }}"
+
+
+# ============================================================
+# 7. Validar resultado
+# ============================================================
+
+- name: Validar informações das GMUDs
+  ansible.builtin.assert:
+    that:
+      - item.inicio is defined
+      - item.inicio is not none
+      - item.fim is defined
+      - item.fim is not none
+      - item.ativos is defined
+      - item.ativos | length > 0
+    fail_msg: >-
+      A GMUD {{ item.chave }} não possui todos os dados necessários.
+      Início: {{ item.inicio | default('não informado') }}
+      Fim: {{ item.fim | default('não informado') }}
+      Ativos: {{ item.ativos | default([]) }}
+  loop: "{{ gmuds }}"
+  loop_control:
+    label: "{{ item.chave }}"
+
+
+# ============================================================
+# 8. Mostrar resultado da descoberta
+# ============================================================
+
+- name: Mostrar resultado da descoberta
+  ansible.builtin.debug:
+    msg:
+      gmud: "{{ item.chave }}"
+      resumo: "{{ item.resumo }}"
+      inicio: "{{ item.inicio }}"
+      fim: "{{ item.fim }}"
+      ativos: "{{ item.ativos }}"
+  loop: "{{ gmuds }}"
+  loop_control:
+    label: "{{ item.chave }}"
+
+========================================
+ARQUIVO: new_outage/roles/inventory/tasks/main.yml
+========================================
+
+---
+# Cria em memória o host usado pelo connection plugin da
+# community.zabbix. Nada é executado no Zabbix aqui.
+#
+# Se zabbix_habilitado for false, esta role não faz nada e o
+# playbook segue normalmente (o Dynatrace nunca depende disso).
+
+- name: Avisar que o Zabbix está desabilitado
+  ansible.builtin.debug:
+    msg: >-
+      zabbix_habilitado=false: o host virtual não será criado e
+      a role "outage" vai pular as tasks do Zabbix.
+  when: not zabbix_habilitado
+
+- name: Validar configuração de acesso ao Zabbix
+  ansible.builtin.assert:
+    that:
+      - zabbix_host | length > 0
+      - zabbix_api_token | length > 0
+    fail_msg: >-
+      Configure zabbix_host e use o token
+      antes de executar o playbook (ou defina
+      zabbix_habilitado: false para pular o Zabbix).
+  when: zabbix_habilitado
+
+- name: Registrar host virtual para a API do Zabbix
+  ansible.builtin.add_host:
+    name: "{{ zabbix_inventory_host }}"
+    ansible_host: "{{ zabbix_host }}"
+    ansible_connection: httpapi
+    ansible_network_os: community.zabbix.zabbix
+    ansible_httpapi_port: "{{ zabbix_port }}"
+    ansible_httpapi_use_ssl: "{{ zabbix_use_ssl }}"
+    ansible_httpapi_validate_certs: "{{ zabbix_validate_certs }}"
+    ansible_zabbix_url_path: "{{ zabbix_url_path }}"
+    ansible_zabbix_auth_key: "{{ zabbix_api_token }}"
+  changed_when: false
+  when: zabbix_habilitado
+
+========================================
+ARQUIVO: new_outage/roles/outage/tasks/busca_ativos_no_cmdb.yml
+========================================
+
+---
+- name: Validar se a GMUD possui sistema vinculado
+  ansible.builtin.assert:
+    that:
+      - gmud.ativos is defined
+      - gmud.ativos | length > 0
+    fail_msg: >-
+      A GMUD {{ gmud.chave }} não possui um sistema CMDB associado.
+
+- name: Consultar objetos CMDB
+  ansible.builtin.uri:
+    url: "{{ jira_url }}/object/{{ item }}"
+    method: GET
+    user: "{{ jira_user }}"
+    password: "{{ jira_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    headers:
+      Accept: application/json
+    status_code: 200
+  loop: "{{ gmud.ativos }}"
+  register: sistema_cmdb
+  environment: "{{ proxy_env }}"
+
+- name: Inicializar listas
+  ansible.builtin.set_fact:
+    ativos_cmdb: []
+    nomes_cmdb: []
+
+- name: Processar objetos CMDB
+  ansible.builtin.set_fact:
+    ativos_cmdb: >-
+      {{
+        ativos_cmdb
+        +
+        (
+          atributo_servidor[0].objectAttributeValues
+          | map(attribute='displayValue')
+          | list
+          if atributo_servidor | length > 0
+          else [ item.json.label ]
+        )
+      }}
+
+    nomes_cmdb: "{{ nomes_cmdb + [ item.json.label ] }}"
+  vars:
+    atributo_servidor: >-
+      {{
+        item.json.attributes
+        | selectattr('objectTypeAttribute.name', 'equalto', 'Servidor')
+        | list
+      }}
+  loop: "{{ sistema_cmdb.results }}"
+
+- name: Atualizar lista de GMUDs com servidores do CMDB
+  ansible.builtin.set_fact:
+    gmuds_atualizadas: >-
+      {{
+        gmuds_atualizadas +
+        [
+          gmud | combine({
+            'ativos': ativos_cmdb | unique,
+            'nome_cmdb': nomes_cmdb | unique
+          })
+        ]
+      }}
+
+
+  
+- name: Debug ativos encontrados
+  ansible.builtin.debug:
+    msg:
+      gmud: "{{ gmud.chave }}"
+      sistemas_cmdb: "{{ nomes_cmdb }}"
+      ativos_cmdb: "{{ ativos_cmdb | unique }}"
+
+========================================
+ARQUIVO: new_outage/roles/outage/tasks/criar_outage.yml
+========================================
+
+---
+- name: Validar configuração do Dynatrace
+  ansible.builtin.assert:
+    that:
+      - dynatrace_url | length > 0
+      - dynatrace_token | length > 0
+    fail_msg: >-
+      Configure dynatrace_url e forneça dynatrace_token pelo AAP.
+
+- name: Inicializar lista de entidades Dynatrace
+  ansible.builtin.set_fact:
+    dynatrace_entities: []
+
+# - name: Localizar service no Dynatrace
+#   ansible.builtin.uri:
+#     url: >-
+#       {{
+#         (dynatrace_url | regex_replace('/+$', ''))
+#         ~ '/api/v2/entities?entitySelector=type(SERVICE),entityName.contains(%22P00PP4%22)&pageSize=1000'
+#       }}
+#     method: GET
+#     headers:
+#       Authorization: "Api-Token {{ dynatrace_token }}"
+#       Accept: application/json
+#     status_code: 200
+#   #loop: "{{ gmud.ativos }}"
+#   environment: "{{ proxy_env }}"
+#   register: busca_service
+#   no_log: false
+#   # loop_control:
+#   #   label: "{{ item }}"
+#   failed_when: false
+
+# - name: Debug busca Service Dynatrace
+#   ansible.builtin.debug:
+#     var: busca_service.json
+
+- name: Localizar ativos no Dynatrace
+  ansible.builtin.uri:
+    url: >-
+      {{ (dynatrace_url | regex_replace('/+$', ''))
+      ~ '/api/v2/entities?entitySelector=type(HOST),entityName.contains(%22'
+      ~ item
+      ~ '%22)&pageSize=100' }}
+    method: GET
+    headers:
+      Authorization: "Api-Token {{ dynatrace_token }}"
+      Accept: application/json
+    status_code: 200
+  loop: "{{ gmud.ativos }}"
+  environment: "{{ proxy_env }}"
+  register: dynatrace_busca
+  no_log: true
+  loop_control:
+    label: "{{ item }}"
+  failed_when: false
+
+- name: Debug busca Dynatrace
+  ansible.builtin.debug:
+    var: dynatrace_busca.results
+
+- name: Montar lista de Entity IDs
+  ansible.builtin.set_fact:
+    dynatrace_entities: >-
+      {{
+        dynatrace_entities +
+        (
+          item.json.entities | default([])
+          | map(attribute='entityId')
+          | list
+        )
+      }}
+  loop: "{{ dynatrace_busca.results }}"
+  no_log: false
+
+- name: Localizar services no Dynatrace
+  ansible.builtin.uri:
+    url: >-
+      {{
+        (dynatrace_url | regex_replace('/+$', ''))
+        ~ '/api/v2/entities?entitySelector=type(SERVICE),entityName.contains(%22'
+        ~ item
+        ~ '%22)&pageSize=1000'
+      }}
+    method: GET
+    headers:
+      Authorization: "Api-Token {{ dynatrace_token }}"
+      Accept: application/json
+    status_code: 200
+  loop: "{{ gmud.nome_cmdb }}"
+  loop_control:
+    label: "{{ item }}"
+  environment: "{{ proxy_env }}"
+  register: busca_service
+  failed_when: false
+
+
+- name: Adicionar Services encontrados
+  ansible.builtin.set_fact:
+    dynatrace_entities: >-
+      {{
+        dynatrace_entities +
+        (
+          item.json.entities | default([])
+          | map(attribute='entityId')
+          | list
+        )
+      }}
+  loop: "{{ busca_service.results }}"
+
+# - name: Debug entidades encontradas
+#   ansible.builtin.debug:
+#     var: dynatrace_entities
+
+- name: Definir se a GMUD é válida para criação da Maintenance Window
+  ansible.builtin.set_fact:
+    gmud_valida: "{{ dynatrace_entities | length > 0 }}"
+
+- name: Informar GMUD ignorada por ativo não encontrado no Dynatrace
+  ansible.builtin.debug:
+    msg: >-
+      GMUD {{ gmud.chave }} ignorada: nem todos os ativos foram encontrados
+      no Dynatrace. Nenhuma Maintenance Window será criada para esta GMUD.
+  when: not gmud_valida
+
+- name: Mostrar o que será colocado em manutenção
+  ansible.builtin.debug:
+    msg:
+      gmud: "{{ gmud.chave }}"
+      inicio: "{{ gmud.inicio }}"
+      fim: "{{ gmud.fim }}"
+      ativos: "{{ gmud.ativos }}"
+      dynatrace_entities: "{{ dynatrace_entities }}"
+  when: gmud_valida
+
+- name: Inicializar filtros Dynatrace
+  ansible.builtin.set_fact:
+    dynatrace_filters: []
+
+- name: Montar filtros Dynatrace
+  ansible.builtin.set_fact:
+    dynatrace_filters: >-
+      {{
+        dynatrace_filters +
+        [{
+          'entityType': item.split('-')[0],
+          'entityId': item
+        }]
+      }}
+  loop: "{{ dynatrace_entities | unique }}"
+
+- name: Salvar entidades Dynatrace para relatório
+  ansible.builtin.set_fact:
+    dynatrace_relatorio: >-
+      {{
+        (dynatrace_relatorio | default([]))
+        +
+        [{
+          'gml': gmud.chave,
+          'inicio': gmud.inicio,
+          'fim': gmud.fim,
+          'entidades': dynatrace_entities | unique
+        }]
+      }}
+  when: gmud_valida
+
+- name: Criar ou validar Maintenance Window
+  ansible.builtin.uri:
+    url: >-
+      {{ (dynatrace_url | regex_replace('/+$', ''))
+      ~ '/api/v2/settings/objects?validateOnly='
+      ~ (dynatrace_validate_only | string | lower) }}
+    method: POST
+    headers:
+      Authorization: "Api-Token {{ dynatrace_token }}"
+      Accept: application/json
+      Content-Type: application/json
+    body_format: json
+    body:
+      - schemaId: "builtin:alerting.maintenance-window"
+        scope: "environment"
+        value:
+          enabled: true
+
+          generalProperties:
+            name: "GMUD {{ gmud.chave }}"
+            description: >-
+              Outage automático para a GMUD {{ gmud.chave }} -
+              {{ gmud.resumo }}
+
+            maintenanceType: "PLANNED"
+            suppression: "DETECT_PROBLEMS_AND_ALERT"
+            disableSyntheticMonitorExecution: false
+
+          schedule:
+            scheduleType: "ONCE"
+            onceRecurrence:
+              startTime: "{{ gmud.inicio | regex_replace('\\.000-0300$', '') }}"
+              endTime: "{{ gmud.fim | regex_replace('\\.000-0300$', '') }}"
+              timeZone: "{{ dynatrace_timezone }}"
+
+          filters: "{{ dynatrace_filters }}"
+    status_code:
+      - 200
+      - 201
+      - 207
+  environment: "{{ proxy_env }}"
+  register: outage_result
+  no_log: false
+  when: gmud_valida
+
+- name: Informar resultado
+  ansible.builtin.debug:
+    msg:
+      gmud: "{{ gmud.chave }}"
+      resultado: >-
+        {{
+          'VALIDAÇÃO OK - nenhuma janela foi criada'
+          if dynatrace_validate_only
+          else 'Maintenance Window criada com sucesso'
+        }}
+  when: gmud_valida
+
+========================================
+ARQUIVO: new_outage/roles/outage/tasks/criar_outage_zabbix.yml
+========================================
+
+---
+# Recebe a variável "gmud" (loop_var definido em main.yml).
+# Só é incluída quando zabbix_habilitado for true (ver main.yml).
+
+- name: Converter janela da GMUD para o formato do Zabbix
+  ansible.builtin.set_fact:
+    zbx_inicio: >-
+      {{ (gmud.inicio | to_datetime('%Y-%m-%dT%H:%M:%S.%f%z')).strftime('%Y-%m-%d %H:%M') }}
+    zbx_fim: >-
+      {{ (gmud.fim | to_datetime('%Y-%m-%dT%H:%M:%S.%f%z')).strftime('%Y-%m-%d %H:%M') }}
+    zbx_minutos: >-
+      {{ ((
+            (gmud.fim   | to_datetime('%Y-%m-%dT%H:%M:%S.%f%z'))
+          - (gmud.inicio | to_datetime('%Y-%m-%dT%H:%M:%S.%f%z'))
+         ).total_seconds() / 60) | round | int }}
+
+- name: Validar duração da janela
+  ansible.builtin.assert:
+    that:
+      - zbx_minutos | int > 0
+    fail_msg: >-
+      GMUD {{ gmud.chave }}: janela inválida
+      ({{ gmud.inicio }} -> {{ gmud.fim }}).
+
+- name: Localizar ativos no Zabbix (UPPER)
+  community.zabbix.zabbix_host_info:
+    host_name: "{{ item | upper }}"
+    exact_match: true
+  loop: "{{ gmud.ativos }}"
+  delegate_to: "{{ zabbix_inventory_host }}"
+  register: zbx_busca_upper
+  failed_when: false
+
+- name: Localizar ativos no Zabbix (LOWER)
+  community.zabbix.zabbix_host_info:
+    host_name: "{{ item | lower }}"
+    exact_match: true
+  loop: "{{ gmud.ativos }}"
+  delegate_to: "{{ zabbix_inventory_host }}"
+  register: zbx_busca_lower
+  failed_when: false
+
+- name: Montar lista de hosts encontrados
+  ansible.builtin.set_fact:
+    zbx_hosts: >-
+      {{
+        (
+          (
+            zbx_busca_upper.results
+            +
+            zbx_busca_lower.results
+          )
+          | selectattr('hosts', 'defined')
+          | map(attribute='hosts')
+          | flatten
+          | map(attribute='host')
+          | unique
+          | list
+        )
+      }}
+
+- name: Definir se a GMUD é válida para o Zabbix
+  ansible.builtin.set_fact:
+    gmud_valida_zabbix: "{{ zbx_hosts | length == gmud.ativos | length }}"
+
+- name: Informar GMUD ignorada por ativo não encontrado no Zabbix
+  ansible.builtin.debug:
+    msg: >-
+      GMUD {{ gmud.chave }} ignorada no Zabbix: esperados
+      {{ gmud.ativos | length }} ativos, encontrados {{ zbx_hosts | length }}
+      ({{ zbx_hosts | join(', ') }}). Nenhuma maintenance será criada.
+  when: not gmud_valida_zabbix
+
+- name: Mostrar o que será colocado em manutenção no Zabbix
+  ansible.builtin.debug:
+    msg:
+      gmud: "{{ gmud.chave }}"
+      nome_maintenance: "GMUD {{ gmud.chave }}"
+      inicio: "{{ zbx_inicio }}"
+      fim: "{{ zbx_fim }}"
+      duracao_minutos: "{{ zbx_minutos }}"
+      hosts: "{{ zbx_hosts }}"
+  when: gmud_valida_zabbix
+
+- name: Criar maintenance no Zabbix
+  community.zabbix.zabbix_maintenance:
+    state: present
+    name: "GMUD {{ gmud.chave }}"
+    desc: >-
+      Outage automático para a GMUD {{ gmud.chave }} - {{ gmud.resumo }}
+    host_names: "{{ zbx_hosts }}"
+    visible_name: "{{ zabbix_usar_visible_name }}"
+    collect_data: "{{ zabbix_collect_data }}"
+    active_since: "{{ zbx_inicio }}"
+    active_till: "{{ zbx_fim }}"
+    minutes: "{{ zbx_minutos }}"
+  delegate_to: "{{ zabbix_inventory_host }}"
+  environment: "{{ proxy_env }}"
+  register: zbx_maintenance
+  when:
+    - gmud_valida_zabbix
+    - not zabbix_validate_only
+
+- name: Informar resultado do Zabbix
+  ansible.builtin.debug:
+    msg:
+      gmud: "{{ gmud.chave }}"
+      resultado: >-
+        {{
+          'VALIDAÇÃO OK - nenhuma maintenance foi criada'
+          if zabbix_validate_only
+          else 'Maintenance criada/atualizada no Zabbix'
+        }}
+  when: gmud_valida_zabbix
+
+========================================
+ARQUIVO: new_outage/roles/outage/tasks/main.yml
+========================================
+
+---
+# Esta role recebe "gmuds" da role descoberta.
+# Para cada GMUD:
+#   1. Busca os servidores no CMDB.
+#   2. Localiza os ativos no Dynatrace.
+#   3. Garante que todos foram encontrados.
+#   4. Cria/valida a Maintenance Window.
+
+- name: Verificar se há GMUDs para processar
+  ansible.builtin.debug:
+    msg: "Nenhuma GMUD de Observabilidade encontrada."
+  when: gmuds | default([]) | length == 0
+
+- name: Inicializar GMUDs atualizadas
+  ansible.builtin.set_fact:
+    gmuds_atualizadas: []
+
+- name: Achar servidores no CMDB
+  ansible.builtin.include_tasks: busca_ativos_no_cmdb.yml
+  loop: "{{ gmuds | default([]) }}"
+  loop_control:
+    loop_var: gmud
+    label: "{{ gmud.chave }}"
+
+# O Dynatrace roda sempre, independente do Zabbix estar habilitado
+# ou não. Uma GMUD pode existir só no Dynatrace, só no Zabbix, ou
+# nos dois — cada bloco decide por conta própria (gmud_valida /
+# gmud_valida_zabbix), sem depender do resultado do outro.
+
+- name: Processar GMUDs no Dynatrace
+  ansible.builtin.include_tasks: criar_outage.yml
+  loop: "{{ gmuds_atualizadas | default([]) }}"
+  loop_control:
+    loop_var: gmud
+    label: "{{ gmud.chave }}"
+
+- name: Processar GMUDs no Zabbix
+  ansible.builtin.include_tasks: criar_outage_zabbix.yml
+  loop: "{{ gmuds_atualizadas | default([]) }}"
+  loop_control:
+    loop_var: gmud
+    label: "{{ gmud.chave }}"
+  when: zabbix_habilitado
+
+========================================
+ARQUIVO: new_outage/roles/outage/vars/main.yml
+========================================
+
+---
+# gmuds:
+#   - chave: "GML-TESTE"
+#     resumo: "Teste de criação de Maintenance Window"
+#     inicio: "2026-09-18T13:05:00.000-0300"
+#     fim: "2026-09-18T18:00:00.000-0300"
+#     ativos:
+#       - "net002prdlnx795"
+
+# gmuds:
+#   - chave: "GML-TESTE"
+#     resumo: "Teste Dynatrace"
+#     inicio: "2026-09-18T18:08:00.000-0300"
+#     fim: "2026-09-18T19:10:00.000-0300"
+#     ativos:
+#       - "901269"
+
+========================================
+ARQUIVO: new_outage/roles/relatorios/tasks/main.yml
+========================================
+
+---
+- name: Montar dados da planilha
+  ansible.builtin.set_fact:
+    outage_planilha: []
+
+- name: Adicionar ativos das GMUDs
+  ansible.builtin.set_fact:
+    outage_planilha: >-
+      {{
+        outage_planilha +
+        [{
+          'gml': item.0.chave,
+          'ativo': item.1,
+          'tipo': 'HOST',
+          'inicio': item.0.inicio,
+          'fim': item.0.fim
+        }]
+      }}
+  loop: "{{ gmuds_atualizadas | subelements('ativos') }}"
+
+- name: Adicionar SERVICES Dynatrace na planilha
+  ansible.builtin.set_fact:
+    outage_planilha: >-
+      {{
+        outage_planilha +
+        [{
+          'gml': item.0.gml,
+          'ativo': item.1,
+          'tipo': 'SERVICE',
+          'inicio': item.0.inicio,
+          'fim': item.0.fim
+        }]
+      }}
+  loop: "{{ dynatrace_relatorio | default([]) | subelements('entidades') }}"
+  when:
+    - item.1 is match('^SERVICE-')
+
+- name: Montar matriz Excel
+  ansible.builtin.set_fact:
+    excel_matrix: >-
+      {%- set matrix = [] -%}
+
+        {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 1, 'cell_value': 'GML'}) -%}
+        {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 2, 'cell_value': 'ATIVO'}) -%}
+        {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 3, 'cell_value': 'TIPO'}) -%}
+        {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 4, 'cell_value': 'INICIO'}) -%}
+        {%- set _ = matrix.append({'cell_row': 1, 'cell_col': 5, 'cell_value': 'FIM'}) -%}
+
+      {%- for item in outage_planilha | default([]) -%}
+        {%- set row = loop.index + 1 -%}
+
+        {%- set _ = matrix.append({'cell_row': row, 'cell_col': 1, 'cell_value': item.gml}) -%}
+        {%- set _ = matrix.append({'cell_row': row, 'cell_col': 2, 'cell_value': item.ativo}) -%}
+        {%- set _ = matrix.append({'cell_row': row, 'cell_col': 3, 'cell_value': item.tipo}) -%}
+        {%- set _ = matrix.append({'cell_row': row, 'cell_col': 4, 'cell_value': item.inicio}) -%}
+        {%- set _ = matrix.append({'cell_row': row, 'cell_col': 5, 'cell_value': item.fim}) -%}
+      {%- endfor -%}
+
+      {{ matrix }}
+
+
+- name: Definir caminho da planilha
+  ansible.builtin.set_fact:
+    relatorio_excel: "/tmp/outages_gml.xlsx"
+
+- name: Criar planilha
+  ans2dev.general.open_xl:
+    op: n
+    dest: "{{ relatorio_excel }}"
+    sheet_name: "Outages"
+    updates_matrix: "{{ excel_matrix }}"
+
+- name: RELATORIO | Resumo da planilha
+  ansible.builtin.debug:
+    msg:
+      registros: "{{ outage_planilha | default([]) | length }}"
+      arquivo: "{{ relatorio_excel }}"
+# -------------------------------------------------------------------------
+# EMAIL | Enviar relatório de Outages
+# -------------------------------------------------------------------------
+- name: EMAIL | Enviar relatório de Outages
+  community.general.mail:
+    host: vip_smtp.claro.com.br
+    port: 25
+    from: coeeaiops@claro.com.br
+    to: "hassan.silva.terceiros@claro.com.br"
+    subject: >-
+      Relatorio Outages GMUD -
+      {{ ansible_date_time.date }}
+    subtype: plain
+    attach:
+      - "{{ relatorio_excel }}"
+    body: |
+      Prezado(a),
+
+      Segue em anexo o relatório de Outages criados pelo processo automático.
+
+      ================================================================
+      RESUMO
+      ================================================================
+
+      Data/Hora: {{ ansible_date_time.date }} {{ ansible_date_time.time }}
+
+      Total de GMUDs processadas:
+      {{ gmuds_atualizadas | length }}
+
+      Total de registros na planilha:
+      {{ outage_planilha | default([]) | length }}
+
+      ================================================================
+      GMUDS PROCESSADAS
+      ================================================================
+
+      {% for item in gmuds_atualizadas | default([]) %}
+      - {{ item.chave }}
+        Inicio: {{ item.inicio }}
+        Fim: {{ item.fim }}
+        Ativos: {{ item.ativos | length }}
+      {% endfor %}
+
+      ================================================================
+
+      A planilha em anexo contém:
+
+      - GML
+      - Ativo
+      - Início do Outage
+      - Fim do Outage
+
+      Caso uma GMUD possua múltiplos ativos,
+      haverá uma linha para cada ativo.
+
+      Este é um e-mail automático gerado pelo Ansible.
+
+  # when:
+  #   - email_destino is defined
+  #   - email_destino | length > 0

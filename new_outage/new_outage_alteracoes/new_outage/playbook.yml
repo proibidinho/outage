@@ -1,0 +1,42 @@
+---
+- name: Auto Outage GML Observabilidade
+  hosts: localhost
+  gather_facts: true
+  environment:
+    TZ: "America/Sao_Paulo"
+  vars:
+    dynatrace_validate_only: true
+    zabbix_habilitado: false
+
+    # ----------------------------------------------------------
+    # Survey (opcional): número da GML pai, ex.: GML-171661.
+    # Em branco -> processa todas as GMUDs elegíveis (comportamento
+    # de sempre). Preenchido -> processa SOMENTE essa GML, desde que
+    # ela seja elegível (atividade de Observabilidade em execução ou
+    # pronta para implementação).
+    # ----------------------------------------------------------
+    jira_gml: "{{ gml | default('') | string | trim | upper }}"
+
+  pre_tasks:
+    # Evita seguir com um valor digitado errado (espaço, texto livre etc.).
+    - name: Validar o número da GML (variável gml da Survey, opcional)
+      ansible.builtin.assert:
+        that:
+          - jira_gml | length == 0 or jira_gml is match('^[A-Z][A-Z0-9_]*-[0-9]+$')
+        fail_msg: >-
+          A GML informada ("{{ jira_gml }}") não tem o formato esperado.
+          Use algo como GML-171661, ou deixe em branco para processar todas.
+        quiet: true
+
+  roles:
+    # Cria o host virtual usado pelas tasks do Zabbix
+    - role: inventory
+    
+    # Descobre as GMUDs, ativos afetados e janela de manutenção no Jira.
+    - role: descoberta
+
+    # Localiza os ativos no Dynatrace e cria a Maintenance Window.
+    - role: outage
+
+    # Envia o relatorio
+    - role: relatorios

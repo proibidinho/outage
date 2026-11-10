@@ -220,3 +220,27 @@
           else 'Maintenance Window criada com sucesso'
         }}
   when: gmud_valida
+
+# Guarda o desfecho desta GMUD no Dynatrace para o relatório por e-mail.
+# Só registra: não chama API nem altera nada.
+#   IGNORADA  nenhum HOST/SERVICE encontrado (nada criado)
+#   VALIDADO  modo de teste (validateOnly=true)
+#   CRIADA    Maintenance Window criada
+- name: Registrar resultado do Dynatrace para o relatório
+  ansible.builtin.set_fact:
+    outage_dynatrace_resultado: >-
+      {{
+        (outage_dynatrace_resultado | default([]))
+        +
+        [{
+          'chave': gmud.chave,
+          'status': status_dyn,
+          'hosts_qtd': dynatrace_entities | unique | select('match', '^HOST-') | list | length,
+          'services_qtd': dynatrace_entities | unique | select('match', '^SERVICE-') | list | length
+        }]
+      }}
+  vars:
+    status_dyn: >-
+      {{ 'IGNORADA' if not (gmud_valida | bool)
+         else 'VALIDADO' if dynatrace_validate_only | bool
+         else 'CRIADA' }}

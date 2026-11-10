@@ -69,6 +69,26 @@
         | list
       }}
 
+# 3b. Survey (opcional): restringir a UMA GML pai.
+# A GML informada continua precisando ser elegível (mesma regra de sempre);
+# a Survey só reduz a lista, nunca inclui uma GMUD que não seria processada.
+- name: Avisar quando a GML informada na Survey não é elegível
+  ansible.builtin.debug:
+    msg: >-
+      A GML {{ jira_gml }} não está entre as GMUDs elegíveis desta execução
+      (elegíveis: {{ gmuds_pai | join(', ') if gmuds_pai | length > 0 else 'nenhuma' }}).
+      Confira a chave e se existe atividade de {{ executante_alvo }} em
+      "Pronto para Implementação" ou "Atividade em execução" ligada a ela.
+      Nada será processado.
+  when:
+    - jira_gml | default('') | length > 0
+    - jira_gml | default('') not in gmuds_pai
+
+- name: Restringir o processamento à GML informada na Survey
+  ansible.builtin.set_fact:
+    gmuds_pai: "{{ [jira_gml] if jira_gml in gmuds_pai else [] }}"
+  when: jira_gml | default('') | length > 0
+
 
 # ============================================================
 # 4. Buscar os dados completos de cada GMUD

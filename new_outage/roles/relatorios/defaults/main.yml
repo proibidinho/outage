@@ -1,0 +1,35 @@
+---
+# ============================================================
+# Parâmetros do relatório por e-mail (precedência mais baixa:
+# group_vars, playbook, Survey e extra vars sobrescrevem).
+# ============================================================
+
+# SMTP e remetente (mesmos valores que estavam fixos na task).
+relatorio_smtp_host: vip_smtp.claro.com.br
+relatorio_smtp_porta: 25
+relatorio_remetente: coeeaiops@claro.com.br
+
+# Destinatário(s). Ordem de preferência:
+#   1) email_destino (Survey/extra vars)
+#   2) email         (mesmo nome usado na Survey da automação de certificados)
+#   3) o endereço que estava fixo na task
+# Aceita um endereço ou uma lista.
+relatorio_destinatarios: "{{ email_destino | default(email | default('hassan.silva.terceiros@claro.com.br')) }}"
+
+# Assunto = prefixo + data (+ " (VALIDAÇÃO)" quando o Dynatrace está em teste).
+relatorio_assunto_prefixo: "Relatorio Outages GMUD"
+
+# Aparência.
+relatorio_titulo: "OUTAGE GMUD • OBSERVABILIDADE"
+relatorio_cor: "#1565c0"
+
+# Link para o chamado no Jira (base + /browse/GML-123). Vazio = sem link.
+relatorio_link_jira: "{{ jira_base_url | default('') | regex_replace('/+$', '') }}"
+
+# Quantos servidores listar por GMUD no corpo do e-mail
+# (a lista completa sempre vai na planilha anexa).
+relatorio_max_ativos: 15
+
+# true  = envia o e-mail mesmo sem nenhuma GMUD (comportamento anterior)
+# false = só envia quando houver GMUD processada
+relatorio_enviar_sem_gmud: true
