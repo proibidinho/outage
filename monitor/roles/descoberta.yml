@@ -154,13 +154,13 @@
         | join('')
         | trim
         | regex_replace('^\\*\\.', 'star.')
-      ) %} {% if host and estado.validade %} {% set resultado.certificados = resultado.certificados + [
+      ) %} {% if host and (estado.validade or operacao == 'REMOCAO') %} {% set resultado.certificados = resultado.certificados + [
         {
           'ticket': ticket.key,
           'operacao': operacao,
           'host': host,
           'tipo': estado.tipo,
-          'validade': estado.validade
+          'validade': '' if operacao == 'REMOCAO' else estado.validade
         }
       ] %} {% endif %} {% endif %} {% endfor %} {% endfor %} {% endif %} {% endfor %} {% endfor %} {{ resultado.certificados | to_yaml | from_yaml }}
 
@@ -192,14 +192,17 @@
 - name: Extrair certificado dos chamados de criação
   ansible.builtin.set_fact:
     certificados_criacao_jira: >-
-      {%- set resultado = namespace(certificados=[]) -%} {%- for ticket in tickets_certificados | default([]) -%} {%- set cert = namespace(host='', tipo='', validade='') -%} {%- set pars = namespace(lista=[]) -%} {%- for bloco in ticket.fields.description.content | default([]) -%} {%- if bloco.type == 'paragraph' -%} {%- set pars.lista = pars.lista + [bloco] -%} {%- elif bloco.type in ['bulletList', 'orderedList'] -%} {%- for li in bloco.content | default([]) -%} {%- for pg in li.content | default([]) if pg.type == 'paragraph' -%} {%- set pars.lista = pars.lista + [pg] -%} {%- endfor -%} {%- endfor -%} {%- endif -%} {%- endfor -%} {%- set pares = namespace(lista=[]) -%} {%- for bloco in pars.lista -%} {%- set t = namespace(texto='') -%} {%- for no in bloco.content | default([]) -%} {%- if no.type == 'text' -%} {%- set t.texto = t.texto ~ no.text -%} {%- elif no.type == 'hardBreak' -%} {%- set t.texto = t.texto ~ '\n' -%} {%- endif -%} {%- endfor -%} {%- for linha in t.texto.split('\n') if ':' in linha -%} {%- set pares.lista = pares.lista + [{'rotulo': linha.split(':', 1)[0] | trim | lower, 'valor': linha.split(':', 1)[1] | trim}] -%} {%- endfor -%} {%- endfor -%} {#- par final "nome" vazio: força o fechamento do último bloco -#} {%- set pares.lista = pares.lista + [{'rotulo': 'nome', 'valor': ''}] -%} {%- for par in pares.lista -%} {%- if par.rotulo.startswith('nome') -%} {%- if cert.host -%} {%- if cert.validade -%} {%- set resultado.certificados = resultado.certificados + [{'ticket': ticket.key, 'operacao': ('CRIACAO' if ticket.key in (tickets_criacao | map(attribute='key') | list) else 'REMOCAO' if ticket.key in (tickets_remocao | map(attribute='key') | list) else 'ATUALIZACAO'), 'host': cert.host | regex_replace('^\\*\\.', 'star.'), 'tipo': cert.tipo, 'validade': cert.validade}] -%} {%- endif -%} {%- set cert.tipo = '' -%} {%- set cert.validade = '' -%} {%- endif -%} {%- set cert.host = par.valor -%} {%- elif par.rotulo.startswith('tipo de certificado') -%} {%- set cert.tipo = 'Externo' if par.valor | upper == 'EXTERNO' else 'Interno' if par.valor | upper in ['INTERNO', 'INTERNOS'] else '' -%} {%- elif par.rotulo.startswith('data de renova') and par.valor is match('^[0-9]{2}/[0-9]{2}/[0-9]{4}$') -%} {%- set cert.validade = par.valor -%} {%- endif -%} {%- endfor -%} {%- endfor -%} {{ resultado.certificados }}
+      {%- set resultado = namespace(certificados=[]) -%} {%- for ticket in tickets_certificados | default([]) -%} {%- set cert = namespace(host='', tipo='', validade='') -%} {%- set op = 'CRIACAO' if ticket.key in (tickets_criacao | map(attribute='key') | list) else 'REMOCAO' if ticket.key in (tickets_remocao | map(attribute='key') | list) else 'ATUALIZACAO' -%} {%- set pars = namespace(lista=[]) -%} {%- for bloco in ticket.fields.description.content | default([]) -%} {%- if bloco.type == 'paragraph' -%} {%- set pars.lista = pars.lista + [bloco] -%} {%- elif bloco.type in ['bulletList', 'orderedList'] -%} {%- for li in bloco.content | default([]) -%} {%- for pg in li.content | default([]) if pg.type == 'paragraph' -%} {%- set pars.lista = pars.lista + [pg] -%} {%- endfor -%} {%- endfor -%} {%- endif -%} {%- endfor -%} {%- set pares = namespace(lista=[]) -%} {%- for bloco in pars.lista -%} {%- set t = namespace(texto='') -%} {%- for no in bloco.content | default([]) -%} {%- if no.type == 'text' -%} {%- set t.texto = t.texto ~ no.text -%} {%- elif no.type == 'hardBreak' -%} {%- set t.texto = t.texto ~ '\n' -%} {%- endif -%} {%- endfor -%} {%- for linha in t.texto.split('\n') if ':' in linha -%} {%- set pares.lista = pares.lista + [{'rotulo': linha.split(':', 1)[0] | trim | lower, 'valor': linha.split(':', 1)[1] | trim}] -%} {%- endfor -%} {%- endfor -%} {#- par final "nome" vazio: força o fechamento do último bloco -#} {%- set pares.lista = pares.lista + [{'rotulo': 'nome', 'valor': ''}] -%} {%- for par in pares.lista -%} {%- if par.rotulo.startswith('nome') -%} {%- if cert.host -%} {%- if cert.validade or op == 'REMOCAO' -%} {%- set resultado.certificados = resultado.certificados + [{'ticket': ticket.key, 'operacao': op, 'host': cert.host | regex_replace('^\\*\\.', 'star.'), 'tipo': cert.tipo, 'validade': '' if op == 'REMOCAO' else cert.validade}] -%} {%- endif -%} {%- set cert.tipo = '' -%} {%- set cert.validade = '' -%} {%- endif -%} {%- set cert.host = par.valor -%} {%- elif par.rotulo.startswith('tipo de certificado') -%} {%- set cert.tipo = 'Externo' if par.valor | upper == 'EXTERNO' else 'Interno' if par.valor | upper in ['INTERNO', 'INTERNOS'] else '' -%} {%- elif par.rotulo.startswith('data de renova') and par.valor is match('^[0-9]{2}/[0-9]{2}/[0-9]{4}$') -%} {%- set cert.validade = par.valor -%} {%- endif -%} {%- endfor -%} {%- endfor -%} {{ resultado.certificados }}
 
-- name: Avisar sobre chamados de criação sem certificado reconhecido
+- name: Avisar sobre chamados de criação/remoção sem certificado reconhecido
   ansible.builtin.debug:
-    msg: "Chamado {{ item.key }} ignorado: não foi possível ler host e data de renovação válidos da descrição."
+    msg: >-
+      Chamado {{ item.key }} ignorado: não foi possível ler
+      {{ 'o host e o tipo' if item.key in (tickets_remocao | map(attribute='key') | list) else 'host e data de renovação válidos' }}
+      da descrição.
   loop: >-
     {{
-      tickets_criacao
+      (tickets_criacao + tickets_remocao)
       | rejectattr('key', 'in', (certificados_jira + certificados_criacao_jira) | map(attribute='ticket') | list)
       | list
     }}
@@ -234,118 +237,3 @@
 #   loop: "{{ certificados_para_atualizar + certificados_para_criar }}"
 #   loop_control:
 #     label: "{{ item.operacao }} {{ item.host }}"
-
-
-#Exemplo do que veio na task "Mostrar chamados encontrados"
-{
-  "msg": {
-    "ticket": "PDST-2601868",
-    "resumo": "Remoção de Alerta de Certificado - Zabbix",
-    "blocos_adf": "5"
-  },
-  "_ansible_verbose_always": true,
-  "_ansible_no_log": false,
-  "changed": false,
-  "item": {
-    "expand": "renderedFields,names,schema,operations,editmeta,changelog,versionedRepresentations",
-    "id": "4989757",
-    "self": "https://clarobr.atlassian.net/rest/api/3/issue/4989757",
-    "key": "PDST-2601868",
-    "fields": {
-      "summary": "Remoção de Alerta de Certificado - Zabbix",
-      "description": {
-        "type": "doc",
-        "version": 1,
-        "content": [
-          {
-            "type": "paragraph",
-            "content": [
-              {
-                "type": "text",
-                "text": "Nome dos certificado: OACOBIEEDEV.CLARO.COM.BR"
-              },
-              {
-                "type": "hardBreak"
-              },
-              {
-                "type": "text",
-                "text": "Tipo de certificado: Interno"
-              }
-            ]
-          },
-          {
-            "type": "paragraph",
-            "content": [
-              {
-                "type": "text",
-                "text": "Nome dos certificado: OAC-OBIEE-HML.CLARO.COM.BR"
-              },
-              {
-                "type": "hardBreak"
-              },
-              {
-                "type": "text",
-                "text": "Tipo de certificado: Interno"
-              }
-            ]
-          },
-          {
-            "type": "paragraph",
-            "content": [
-              {
-                "type": "text",
-                "text": "Nome dos certificado: OAC-OBIEE-PRD.CLARO.COM.BR"
-              },
-              {
-                "type": "hardBreak"
-              },
-              {
-                "type": "text",
-                "text": "Tipo de certificado: Interno"
-              }
-            ]
-          },
-          {
-            "type": "paragraph",
-            "content": [
-              {
-                "type": "text",
-                "text": "Nome dos certificado: 10.0.197.191/SRE/LOGIN.PL"
-              },
-              {
-                "type": "hardBreak"
-              },
-              {
-                "type": "text",
-                "text": "Tipo de certificado: Interno"
-              }
-            ]
-          },
-          {
-            "type": "paragraph",
-            "content": [
-              {
-                "type": "text",
-                "text": "Nome dos certificado: AUTOPIX01-HML.CORP.CLAROBR"
-              },
-              {
-                "type": "hardBreak"
-              },
-              {
-                "type": "text",
-                "text": "Tipo de certificado: Interno"
-              }
-            ]
-          }
-        ]
-      },
-      "customfield_10238": {
-        "name": "CLBR-TI-OPS-IT_SERVICE_MONITORING",
-        "groupId": "65b93dd4-d7c6-4357-a79f-a612c76c07ed",
-        "self": "https://clarobr.atlassian.net/rest/api/3/group?groupId=65b93dd4-d7c6-4357-a79f-a612c76c07ed"
-      }
-    }
-  },
-  "ansible_loop_var": "item",
-  "_ansible_item_label": "PDST-2601868"
-}
