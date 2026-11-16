@@ -167,17 +167,14 @@
     total_sucesso: "{{ result.results | reject('skipped') | reject('failed') | list | length }}"
     total_falha_oracle: "{{ result.results | reject('skipped') | select('failed') | list | length }}"
 
-# Versão do caso XML: o output sai como UM texto (não lista de linhas).
-# Com callback_result_format=yaml (ansible.cfg do projeto) o AWX mostra o
-# texto sem aspas, sem vírgulas e sem \n, pronto para copiar e colar.
+# Versão do caso XML: imprime SÓ o output do script, como UM texto, em uma
+# única task (sem loop, para o Ansible não exibir o "item" com os dados de
+# conexão do resultado da task do Oracle). Com callback_result_format=yaml
+# (ansible.cfg do projeto) o AWX mostra o texto sem aspas, vírgulas e \n.
 - name: Imprimir result
   ansible.builtin.debug:
-    msg: "{{ item.output | default('') | trim }}"
-  loop: "{{ result.results }}"
-  loop_control:
-    index_var: idx
-    label: "{{ 'linha ' ~ csv_numeros_linhas[idx + 1] if modo_massivo | bool else 'individual' }}"
-  when: item is not skipped and item is not failed
+    msg: >-
+      {% set blocos = [] %}{% for r in result.results %}{% if r is not skipped and r is not failed %}{% set _ = blocos.append((('----- linha ' ~ csv_numeros_linhas[loop.index] ~ ' -----\n') if modo_massivo | bool else '') ~ (r.output | default('') | trim)) %}{% endif %}{% endfor %}{{ blocos | join('\n\n') }}
 
 - name: Relatório consolidado
   ansible.builtin.debug:
