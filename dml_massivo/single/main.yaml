@@ -51,19 +51,19 @@
 - name: Preparar registro único (modo individual)
   when: not (modo_massivo | bool)
   block:
-  - name: Validar binds do script no modo individual
-    ansible.builtin.assert:
-      that:
-      - binds_script | difference(bind_vars.keys() | list) | length == 0
-      fail_msg: "Variáveis não informadas na Survey: {{ binds_script | difference(bind_vars.keys() | list) }}"
+    - name: Validar binds do script no modo individual
+      ansible.builtin.assert:
+        that:
+          - binds_script | difference(bind_vars.keys() | list) | length == 0
+        fail_msg: "Variáveis não informadas na Survey: {{ binds_script | difference(bind_vars.keys() | list) }}"
 
-  - name: Definir registro único
-    ansible.builtin.set_fact:
-      registros: "{{ [bind_vars] }}"
-      csv_numeros_linhas: []
-      csv_cabecalho: []
-      indices_invalidos: []
-      indices_vazios: []
+    - name: Definir registro único
+      ansible.builtin.set_fact:
+        registros: "{{ [bind_vars] }}"
+        csv_numeros_linhas: []
+        csv_cabecalho: []
+        indices_invalidos: []
+        indices_vazios: []
 
 # ---------------------------------------------------------------------------
 # Modo massivo: lê o csv_text
@@ -71,76 +71,77 @@
 - name: Preparar registros do CSV (modo massivo)
   when: modo_massivo | bool
   block:
-  # Números (no arquivo original) das linhas não vazias; a 1ª é o cabeçalho.
-  - name: Mapear linhas do CSV e cabeçalho
-    ansible.builtin.set_fact:
-      csv_numeros_linhas: >-
-        {% set n = [] %}{% for l in csv_text.splitlines() %}{% if l | trim | length > 0 %}{% set _ = n.append(loop.index) %}{% endif %}{% endfor %}{{ n }}
-      csv_cabecalho: >-
-        {{ (csv_text.splitlines() | reject('match', '^\s*$') | first)
-           | regex_replace('^﻿', '') | split(';') | map('trim') | list }}
+    # Números (no arquivo original) das linhas não vazias; a 1ª é o cabeçalho.
+    - name: Mapear linhas do CSV e cabeçalho
+      ansible.builtin.set_fact:
+        csv_numeros_linhas: >-
+          {% set n = [] %}{% for l in csv_text.splitlines() %}{% if l | trim | length > 0 %}{% set _ = n.append(loop.index) %}{% endif %}{% endfor %}{{ n }}
+        csv_cabecalho: >-
+          {{ (csv_text.splitlines() | reject('match', '^\s*$') | first)
+             | regex_replace('^﻿', '') | split(';') | map('trim') | list }}
 
-  - name: Validar cabeçalho do CSV
-    ansible.builtin.assert:
-      that:
-      - csv_cabecalho | select('equalto', '') | list | length == 0
-      - csv_cabecalho | map('upper') | unique | list | length == csv_cabecalho | length
-      - binds_script | difference(csv_cabecalho) | length == 0
-      fail_msg: >-
-        Cabeçalho inválido (linha {{ csv_numeros_linhas[0] }}): coluna sem nome, coluna duplicada ou colunas obrigatórias ausentes {{ binds_script | difference(csv_cabecalho) }}. Recebido: {{ csv_cabecalho }}
+    - name: Validar cabeçalho do CSV
+      ansible.builtin.assert:
+        that:
+          - csv_cabecalho | select('equalto', '') | list | length == 0
+          - csv_cabecalho | map('upper') | unique | list | length == csv_cabecalho | length
+          - binds_script | difference(csv_cabecalho) | length == 0
+        fail_msg: >-
+          Cabeçalho inválido (linha {{ csv_numeros_linhas[0] }}): coluna sem nome,
+          coluna duplicada ou colunas obrigatórias ausentes
+          {{ binds_script | difference(csv_cabecalho) }}. Recebido: {{ csv_cabecalho }}
 
-  - name: Ler o CSV
-    block:
-    - name: Criar arquivo temporário com o CSV
-      ansible.builtin.tempfile:
-        state: file
-        suffix: .csv
-      register: csv_temp
+    - name: Ler o CSV
+      block:
+        - name: Criar arquivo temporário com o CSV
+          ansible.builtin.tempfile:
+            state: file
+            suffix: .csv
+          register: csv_temp
 
-    # Grava sem as linhas em branco e com o cabeçalho normalizado (trim).
-    # Os valores das linhas de dados não são alterados.
-    - name: Escrever CSV no arquivo temporário
-      ansible.builtin.copy:
-        # Aspas duplas de propósito: em bloco >- o '\n' vira texto literal
-        # e o arquivo fica com uma linha só (read_csv retorna list: []).
-        content: "{{ ([csv_cabecalho | join(';')] + (csv_text.splitlines() | reject('match', '^\\s*$') | list)[1:]) | join('
+        # Grava sem as linhas em branco e com o cabeçalho normalizado (trim).
+        # Os valores das linhas de dados não são alterados.
+        - name: Escrever CSV no arquivo temporário
+          ansible.builtin.copy:
+            # Aspas duplas de propósito: em bloco >- o '\n' vira texto literal
+            # e o arquivo fica com uma linha só (read_csv retorna list: []).
+            content: "{{ ([csv_cabecalho | join(';')] + (csv_text.splitlines() | reject('match', '^\\s*$') | list)[1:]) | join('\n') }}"
+            dest: "{{ csv_temp.path }}"
+            mode: "0600"
+          no_log: true
 
-          ') }}"
-        dest: "{{ csv_temp.path }}"
-        mode: "0600"
-      no_log: true
+        - name: Ler CSV do arquivo
+          community.general.read_csv:
+            path: "{{ csv_temp.path }}"
+            delimiter: ";"
+          register: csv_list
+          no_log: true
 
-    - name: Ler CSV do arquivo
-      community.general.read_csv:
-        path: "{{ csv_temp.path }}"
-        delimiter: ";"
-      register: csv_list
-      no_log: true
+      always:
+        - name: Remover arquivo temporário
+          ansible.builtin.file:
+            path: "{{ csv_temp.path }}"
+            state: absent
+          when: csv_temp.path is defined
 
-    always:
-    - name: Remover arquivo temporário
-      ansible.builtin.file:
-        path: "{{ csv_temp.path }}"
-        state: absent
-      when: csv_temp.path is defined
+    - name: Validar registros do CSV
+      ansible.builtin.assert:
+        that:
+          - csv_list.list | length > 0
+          - csv_list.list | length == (csv_numeros_linhas | length) - 1
+        fail_msg: >-
+          CSV sem registros, ou com campo entre aspas contendo quebra de linha
+          (não suportado). Registros lidos: {{ csv_list.list | length }}.
 
-  - name: Validar registros do CSV
-    ansible.builtin.assert:
-      that:
-      - csv_list.list | length > 0
-      - csv_list.list | length == (csv_numeros_linhas | length) - 1
-      fail_msg: >-
-        CSV sem registros, ou com campo entre aspas contendo quebra de linha (não suportado). Registros lidos: {{ csv_list.list | length }}.
-
-  # Campos a menos => valores None; campos a mais => chave extra.
-  # Linhas com todos os campos vazios são ignoradas (não executadas).
-  - name: Classificar registros do CSV
-    ansible.builtin.set_fact:
-      registros: "{{ csv_list.list }}"
-      indices_invalidos: >-
-        {% set out = [] %}{% for row in csv_list.list %}{% if (row | length) != (csv_cabecalho | length) or (row.values() | select('none') | list | length) > 0 %}{% set _ = out.append(loop.index0) %}{% endif %}{% endfor %}{{ out }}
-      indices_vazios: >-
-        {% set out = [] %}{% for row in csv_list.list %}{% if (row | length) == (csv_cabecalho | length) and (row.values() | select('none') | list | length) == 0 and (row.values() | map('trim') | reject('equalto', '') | list | length) == 0 %}{% set _ = out.append(loop.index0) %}{% endif %}{% endfor %}{{ out }}
+    # Campos a menos => valores None; campos a mais => chave extra.
+    # Linhas com todos os campos vazios são ignoradas (não executadas).
+    - name: Classificar registros do CSV
+      ansible.builtin.set_fact:
+        registros: "{{ csv_list.list }}"
+        indices_invalidos: >-
+          {% set out = [] %}{% for row in csv_list.list %}{% if (row | length) != (csv_cabecalho | length) or (row.values() | select('none') | list | length) > 0 %}{% set _ = out.append(loop.index0) %}{% endif %}{% endfor %}{{ out }}
+        indices_vazios: >-
+          {% set out = [] %}{% for row in csv_list.list %}{% if (row | length) == (csv_cabecalho | length) and (row.values() | select('none') | list | length) == 0 and (row.values() | map('trim') | reject('equalto', '') | list | length) == 0 %}{% set _ = out.append(loop.index0) %}{% endif %}{% endfor %}{{ out }}
 
 # ---------------------------------------------------------------------------
 # Execução: uma tentativa Oracle por registro, sem abortar nas falhas
@@ -166,9 +167,12 @@
     total_sucesso: "{{ result.results | reject('skipped') | reject('failed') | list | length }}"
     total_falha_oracle: "{{ result.results | reject('skipped') | select('failed') | list | length }}"
 
+# Versão do caso XML: o output sai como UM texto (não lista de linhas).
+# Com callback_result_format=yaml (ansible.cfg do projeto) o AWX mostra o
+# texto sem aspas, sem vírgulas e sem \n, pronto para copiar e colar.
 - name: Imprimir result
   ansible.builtin.debug:
-    msg: "{{ item.output.splitlines() if item.output is defined else [] }}"
+    msg: "{{ item.output | default('') | trim }}"
   loop: "{{ result.results }}"
   loop_control:
     index_var: idx
@@ -216,40 +220,8 @@
 - name: Falhar o job se algum registro falhou
   ansible.builtin.fail:
     msg: >-
-      {{ (total_falha_oracle | int) + (indices_invalidos | length) }} registro(s) com falha. Veja o relatório consolidado acima.
+      {{ (total_falha_oracle | int) + (indices_invalidos | length) }} registro(s)
+      com falha. Veja o relatório consolidado acima.
   when: (total_falha_oracle | int) + (indices_invalidos | length) > 0
 
-#Playbook.yml abaixo
----
-- name: Ansible
-  hosts: localhost
-  gather_facts: false
-
-  vars_files:
-  - vars/test_vars.yml
-  - vars/db_map.yml
-
-  vars:
-    script_path: "script/script.sql"
-
-  tasks:
-
-  - name: Include JIRA role
-    ansible.builtin.include_role:
-      name: dml.oracle_dml.jira
-    when: platform == 'JIRA'
-
-  - name: Include ITP role
-    ansible.builtin.include_role:
-      name: dml.oracle_dml.itp
-    when: platform == 'ITP'
-
-  - name: Include OS/OC role
-    ansible.builtin.include_role:
-      name: dml.oracle_dml.os_oc
-    when: platform == 'OS/OC'
-
-  - name: Include Oracle role
-    ansible.builtin.include_role:
-      name: oracle_dml
-    when: ( executar_oracle_jira | default(false) or executar_oracle_osoc | default(false) or executar_oracle_itp | default(false))
+  #callback_result_format = yaml
