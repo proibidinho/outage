@@ -27,45 +27,55 @@
       name: dml.oracle_dml.os_oc
     when: platform == 'OS/OC'
 
-  # O "always" roda com sucesso ou falha da role, sem alterar o resultado do job.
-  # O email só é enviado nos Job Templates com enviar_saida_email: true.
-  - name: Executar Oracle e enviar saída por email
+  - name: Executar Oracle
     when: ( executar_oracle_jira | default(false) or executar_oracle_osoc | default(false) or executar_oracle_itp | default(false))
     block:
       - name: Include Oracle role
         ansible.builtin.include_role:
           name: oracle_dml
 
-    always:
-      - name: Enviar saída por email
-        community.general.mail:
-          host: vip_smtp.claro.com.br
-          port: 25
-          from: coeeaiops@claro.com.br
-          to: "{{ email }}"
-          subject: "Saída DML Oracle - Chamado {{ chamado | default('-') }} - {{ now().strftime('%d/%m/%Y %H:%M') }}"
-          subtype: plain
-          charset: utf-8
-          body: |-
-            Chamado ......: {{ chamado | default('-') }}
-            Plataforma ...: {{ platform | default('-') }}
-            Credencial ...: {{ oracle_credencial | default('-') }}
-            Sucessos .....: {{ total_sucesso | default('-') }}
-            Falhas .......: {{ ((total_falha_oracle | default(0) | int) + (indices_invalidos | default([]) | length)) }}
+    # Mostra o erro mesmo que a task que falhou use no_log: true.
+    # Imprime SÓ os campos msg/stderr (nunca o resultado inteiro, que pode
+    # trazer argumentos como a senha) e depois falha o job normalmente.
+    rescue:
+      - name: Detalhar o erro (a role oracle_dml usa no_log)
+        ansible.builtin.debug:
+          msg: |-
+            ======================== ERRO NA EXECUÇÃO ========================
+            Chamado ............: {{ chamado | default('-') }}
+            Plataforma .........: {{ platform | default('-') }}
+            Credencial Oracle ..: {{ oracle_credencial | default('-') }}
+            Task que falhou ....: {{ ansible_failed_task.name | default('-') }}
+            {% set res = (result | default({}, true)).results | default([], true) %}
+            {% set massivo = (modo_massivo | default(false, true)) | bool %}
+            {% set nums = csv_numeros_linhas | default([], true) %}
+            {% set cab = csv_cabecalho | default([], true) %}
+            {% set invalidos = indices_invalidos | default([], true) %}
+            {% set falhas = res | select('failed') | list %}
+            {% if invalidos | length > 0 or falhas | length > 0 %}
 
-            {% for r in result.results %}
-            {% if r is not skipped and r is not failed %}
-            {% if modo_massivo | default(false) | bool %}
-            ----- linha {{ csv_numeros_linhas[loop.index] | default('-') }} -----
-            {% endif %}
-            {{ r.output | default('') | trim }}
-
+            ------------------------- linhas com erro -------------------------
+            {% for i in invalidos %}
+            linha {{ nums[i + 1] | default('-') }}: quantidade de campos diferente do cabeçalho ({{ cab | length }}); não executada
+            {% endfor %}
+            {% for r in res %}
+            {% if r is failed %}
+            {% set ident = (r.item[cab[0]] if massivo and cab | length > 0 else chamado | default('-')) | default('-', true) | string | truncate(50) %}
+            {% set linha = (nums[loop.index] | default('-')) if massivo else 'individual' %}
+            {% if massivo %}linha {{ linha }} | {{ ident }}{% else %}{{ linha }}{% endif %}:
+              {{ r.msg | default(r.stderr | default('erro sem mensagem', true), true) | string | trim | indent(2) }}
             {% endif %}
             {% endfor %}
-        when:
-          - enviar_saida_email | default(false) | bool
-          - result is defined
-          - email | default('') | length > 0
-        # Falha no envio não pode marcar o job como falho: o DML já foi executado
-        # e quem reexecutar por engano pode duplicar a alteração.
-        ignore_errors: true
+            {% else %}
+
+            {% if ansible_failed_result.msg is defined %}
+            {{ ansible_failed_result.msg }}
+            {% else %}
+            (a task falhou, mas o Ansible não disponibilizou a mensagem de erro dela)
+            {% endif %}
+            {% endif %}
+            ==================================================================
+
+      - name: Falhar o job
+        ansible.builtin.fail:
+          msg: "Job finalizado com erro (chamado {{ chamado | default('-') }}). Detalhes na task anterior."
