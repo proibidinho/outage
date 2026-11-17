@@ -324,3 +324,148 @@
   delegate_to: localhost
 
 
+#Playbook que deve ser configurado agora
+---
+- name: Ansible
+  hosts: localhost
+  gather_facts: false
+
+  vars_files:
+  - vars/test_vars.yml
+  - vars/db_map.yml
+
+  vars:
+    script_path: "script/script.sql"
+
+  tasks:
+
+  - name: Include JIRA role
+    ansible.builtin.include_role:
+      name: dml.oracle_dml.jira
+    when: platform == 'JIRA'
+
+  - name: Include ITP role
+    ansible.builtin.include_role:
+      name: dml.oracle_dml.itp
+    when: platform == 'ITP'
+
+  - name: Include OS/OC role
+    ansible.builtin.include_role:
+      name: dml.oracle_dml.os_oc
+    when: platform == 'OS/OC'
+
+  - name: Falhar se o chamado nao for valido para a plataforma selecionada
+    ansible.builtin.fail:
+      msg: >-
+        O chamado {{ chamado }} não foi encontrado,
+        está encerrado ou não é válido para execução.
+    when: >
+      (platform == 'JIRA' and not (executar_oracle_jira | default(false)))
+      or
+      (platform == 'ITP' and not (executar_oracle_itp | default(false)))
+      or
+      (platform == 'OS/OC' and not (executar_oracle_osoc | default(false)))
+
+  - name: Executar Oracle
+    when: (
+      executar_oracle_jira | default(false) or
+      executar_oracle_osoc | default(false) or
+      executar_oracle_itp | default(false)
+      )
+    block:
+
+      - name: Include Oracle role
+        ansible.builtin.include_role:
+          name: oracle_dml
+
+    # Mostra o erro mesmo que a task que falhou use no_log: true.
+    # Imprime SÓ os campos msg/stderr (nunca o resultado inteiro, que pode
+    # trazer argumentos como a senha) e depois falha o job normalmente.
+    rescue:
+
+      - name: Detalhar o erro (a role oracle_dml usa no_log)
+        ansible.builtin.debug:
+          msg: |-
+            ======================== ERRO NA EXECUÇÃO ========================
+            Chamado ............: {{ chamado | default('-') }}
+            Plataforma .........: {{ platform | default('-') }}
+            Credencial Oracle ..: {{ oracle_credencial | default('-') }}
+            Task que falhou ....: {{ ansible_failed_task.name | default('-') }}
+
+            {% set res = (result | default({}, true)).results | default([], true) %}
+            {% set massivo = (modo_massivo | default(false, true)) | bool %}
+            {% set nums = csv_numeros_linhas | default([], true) %}
+            {% set cab = csv_cabecalho | default([], true) %}
+            {% set invalidos = indices_invalidos | default([], true) %}
+            {% set falhas = res | select('failed') | list %}
+
+            {% if invalidos | length > 0 or falhas | length > 0 %}
+
+            ------------------------- linhas com erro -------------------------
+
+            {% for i in invalidos %}
+            linha {{ nums[i + 1] | default('-') }}: quantidade de campos diferente do cabeçalho ({{ cab | length }}); não executada
+            {% endfor %}
+
+            {% for r in res %}
+            {% if r is failed %}
+            {% set ident = (r.item[cab[0]] if massivo and cab | length > 0 else chamado | default('-')) | default('-', true) | string | truncate(50) %}
+            {% set linha = (nums[loop.index] | default('-')) if massivo else 'individual' %}
+            {% if massivo %}linha {{ linha }} | {{ ident }}{% else %}{{ linha }}{% endif %}:
+              {{ r.msg | default(r.stderr | default('erro sem mensagem', true), true) | string | trim | indent(2) }}
+            {% endif %}
+            {% endfor %}
+
+            {% else %}
+
+            {% if ansible_failed_result.msg is defined %}
+            {{ ansible_failed_result.msg }}
+            {% else %}
+            (a task falhou, mas o Ansible não disponibilizou a mensagem de erro dela)
+            {% endif %}
+
+            {% endif %}
+            ==================================================================
+
+      - name: Falhar o job
+        ansible.builtin.fail:
+          msg: "Job finalizado com erro (chamado {{ chamado | default('-') }}). Detalhes na task anterior."
+
+
+#Playbook atual que deve ser substituido
+---
+- name: Ansible
+  hosts: localhost
+  gather_facts: false
+
+  vars_files:
+    - vars/test_vars.yml 
+    - vars/db_map.yml
+
+  vars:
+    script_path: "script/script.sql"
+
+  tasks:
+
+    - name: Include JIRA role
+      ansible.builtin.include_role:
+        name: dml.oracle_dml.jira  
+      when: platform == 'JIRA'
+
+    - name: Include ITP role
+      ansible.builtin.include_role:
+        name: dml.oracle_dml.itp  
+      when: platform == 'ITP'
+
+    - name: Include OS/OC role
+      ansible.builtin.include_role:
+        name: dml.oracle_dml.os_oc  
+      when: platform == 'OS/OC'
+    
+    - name: Include Oracle role
+      ansible.builtin.include_role:
+        name: oracle_dml
+      when: (
+        executar_oracle_jira | default(false) or 
+        executar_oracle_osoc | default(false) or
+        executar_oracle_itp | default(false))
