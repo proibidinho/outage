@@ -6,16 +6,23 @@
 #   files/playbook_novo.yml    -> como ele deve ficar
 #
 #   export GITLAB_URL=https://gitlab.claro.com.br
-#   export GITLAB_TOKEN=glpat-xxxxxxxx    # Personal Access Token, escopo "api"
+#   # autenticação: use UMA das duas opções
+#   export GITLAB_USER=seu.usuario GITLAB_PASSWORD='sua-senha'   # troca por token OAuth (ver aviso abaixo)
+#   export GITLAB_TOKEN=glpat-xxxxxxxx                           # ou Personal Access Token (escopo "api")
+#
+#   Aviso: a API do GitLab não aceita usuário/senha direto; o playbook usa o fluxo OAuth
+#   "password" (POST /oauth/token). Esse fluxo NÃO funciona com 2FA ativo, e foi marcado
+#   para remoção nas versões self-managed 19.x. Se falhar, só com token.
 #
 #   ansible-playbook substituir.yml                                  # 1) SIMULAÇÃO (padrão, não altera nada)
 #   ansible-playbook substituir.yml -e aplicar=true -e limite=3      # 2) piloto com 3 projetos
 #   ansible-playbook substituir.yml -e aplicar=true                  # 3) execução real
 #   ansible-playbook substituir.yml -e aplicar=true -e modo=mr       #    (ou abrindo um MR por projeto)
 #
-# Sem filtro, varre TODOS os projetos não arquivados em que o dono do token é
-# membro com acesso Developer ou superior. Para limitar a um grupo (com
-# subgrupos): -e gitlab_grupo=nome/do/grupo
+# Sem filtro, varre TODOS os projetos não arquivados que o token enxerga (com
+# token de admin, são todos da instância). Para limitar a um grupo (com
+# subgrupos): -e gitlab_grupo=nome/do/grupo. Token de usuário comum: use
+# -e somente_membro=true para listar só projetos onde ele tem acesso Developer+.
 #
 # Segurança: só altera o projeto cujo playbook.yml for IGUAL ao legado
 # (ignorando apenas CRLF/LF, espaços no fim de linha e linhas em branco no fim
@@ -31,9 +38,13 @@
   vars:
     gitlab_url: "{{ lookup('env', 'GITLAB_URL') }}"
     gitlab_token: "{{ lookup('env', 'GITLAB_TOKEN') }}"
+    gitlab_user: "{{ lookup('env', 'GITLAB_USER') }}"
+    gitlab_password: "{{ lookup('env', 'GITLAB_PASSWORD') }}"
     validar_certs: false            # mesmo comportamento do main.yml (certificado interno)
 
     gitlab_grupo: ""                # opcional: restringe a um grupo (id ou path)
+    somente_membro: false           # false = todos os projetos visíveis ao token (admin vê tudo);
+                                    # true  = só onde o dono do token é membro (Developer+)
     arquivo_alvo: playbook.yml      # caminho do arquivo dentro de cada repositório
     limite: 0                       # 0 = todos; N = só os N primeiros (piloto)
 
@@ -56,7 +67,7 @@
     url_listagem: >-
       {{ api }}/{{ ('groups/' ~ (gitlab_grupo | string | regex_replace('/', '%2F')) ~ '/projects?include_subgroups=true&archived=false')
                    if (gitlab_grupo | string | length) > 0
-                   else 'projects?membership=true&archived=false&min_access_level=30' }}&per_page=100
+                   else ('projects?archived=false&membership=true&min_access_level=30' if (somente_membro | bool) else 'projects?archived=false') }}&per_page=100
 
   tasks:
 
@@ -64,10 +75,40 @@
       ansible.builtin.assert:
         that:
           - gitlab_url | length > 0
-          - gitlab_token | length > 0
+          - (gitlab_token | length > 0) or ((gitlab_user | length > 0) and (gitlab_password | length > 0))
           - modo in ['commit', 'mr']
-        fail_msg: Defina GITLAB_URL e GITLAB_TOKEN (variáveis de ambiente) e use modo=commit ou modo=mr.
+        fail_msg: Defina GITLAB_URL e GITLAB_TOKEN (ou GITLAB_USER + GITLAB_PASSWORD) e use modo=commit ou modo=mr.
         quiet: true
+
+    - name: Obter token OAuth com usuário e senha
+      when: gitlab_token | length == 0
+      block:
+        - name: Pedir token ao GitLab (fluxo password)
+          ansible.builtin.uri:
+            url: "{{ gitlab_url | regex_replace('/+$', '') }}/oauth/token"
+            method: POST
+            body_format: form-urlencoded
+            body:
+              grant_type: password
+              username: "{{ gitlab_user }}"
+              password: "{{ gitlab_password }}"
+              scope: api
+            validate_certs: "{{ validar_certs | bool }}"
+            status_code: 200
+          register: oauth_resp
+          no_log: true
+
+        - name: Guardar o token obtido
+          ansible.builtin.set_fact:
+            gitlab_token: "{{ oauth_resp.json.access_token }}"
+          no_log: true
+      rescue:
+        - name: Falha ao autenticar com usuário e senha
+          ansible.builtin.fail:
+            msg: >-
+              Não foi possível obter token com usuário/senha. Causas comuns: senha incorreta, conta com 2FA
+              (o fluxo password é bloqueado), fluxo password desativado/removido nesta versão do GitLab, ou
+              conta de SSO/LDAP. Nesses casos é necessário usar um token (GITLAB_TOKEN).
 
     # Normalização usada nas comparações (3 cópias idênticas: legado, novo e cada projeto):
     # remove BOM, converte CRLF/CR em LF, tira espaços no fim das linhas e linhas em branco no
@@ -101,7 +142,7 @@
       ansible.builtin.uri:
         url: "{{ url_listagem }}&page=1"
         headers:
-          PRIVATE-TOKEN: "{{ gitlab_token }}"
+          Authorization: "Bearer {{ gitlab_token }}"
         validate_certs: "{{ validar_certs | bool }}"
         status_code: 200
       register: pagina_1
@@ -116,7 +157,7 @@
       ansible.builtin.uri:
         url: "{{ url_listagem }}&page={{ item }}"
         headers:
-          PRIVATE-TOKEN: "{{ gitlab_token }}"
+          Authorization: "Bearer {{ gitlab_token }}"
         validate_certs: "{{ validar_certs | bool }}"
         status_code: 200
       loop: "{{ range(2, (pagina_1.x_total_pages | default(1) | int) + 1) | list }}"
@@ -146,7 +187,7 @@
       ansible.builtin.uri:
         url: "{{ api }}/projects/{{ item.id }}/repository/files/{{ arquivo_alvo | regex_replace('/', '%2F') }}?ref={{ item.default_branch | regex_replace('/', '%2F') }}"
         headers:
-          PRIVATE-TOKEN: "{{ gitlab_token }}"
+          Authorization: "Bearer {{ gitlab_token }}"
         validate_certs: "{{ validar_certs | bool }}"
         status_code: [200, 404]
       failed_when: false
@@ -200,7 +241,7 @@
         url: "{{ api }}/projects/{{ item.id }}/repository/files/{{ arquivo_alvo | regex_replace('/', '%2F') }}"
         method: PUT
         headers:
-          PRIVATE-TOKEN: "{{ gitlab_token }}"
+          Authorization: "Bearer {{ gitlab_token }}"
         body_format: json
         body:
           branch: "{{ item.default_branch }}"
@@ -222,7 +263,7 @@
         url: "{{ api }}/projects/{{ item.id }}/repository/files/{{ arquivo_alvo | regex_replace('/', '%2F') }}"
         method: PUT
         headers:
-          PRIVATE-TOKEN: "{{ gitlab_token }}"
+          Authorization: "Bearer {{ gitlab_token }}"
         body_format: json
         body:
           branch: "{{ branch_mr }}"
@@ -249,7 +290,7 @@
         url: "{{ api }}/projects/{{ item.id }}/merge_requests"
         method: POST
         headers:
-          PRIVATE-TOKEN: "{{ gitlab_token }}"
+          Authorization: "Bearer {{ gitlab_token }}"
         body_format: json
         body:
           source_branch: "{{ branch_mr }}"
