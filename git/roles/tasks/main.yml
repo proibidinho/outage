@@ -1,0 +1,326 @@
+# - name: Ajustando a variavel organization_aap
+#   ansible.builtin.set_fact:
+#     clean_namespace: "{{ organization_aap }}"
+
+- name: Ajustando a variável project_slug
+  ansible.builtin.set_fact:
+    project_slug: >-
+      {{ name_project_aap
+         | community.general.unicode_normalize('NFKD')
+         | regex_replace('[\u0300-\u036f]', '')   
+         | lower
+         | regex_replace('[^a-z0-9]+', '-')       
+         | regex_replace('(^-+|-+$)', '')         
+         | regex_replace('-+', '-')             
+      }}
+
+- name: Ajustando a variavel project_name
+  ansible.builtin.set_fact:
+    project_name: >-
+      {{ project_slug
+         | regex_replace('-', ' ')            
+         | title                              
+      }}
+
+- name: Realizando o fork do Template Oracle DML
+  ansible.builtin.uri:
+    url: "{{ gitlab_url }}/api/v4/projects/208/fork"
+    validate_certs: false
+    method: POST
+    headers:
+      PRIVATE-TOKEN: "{{ gitlab_token }}"
+    body_format: json
+    body:
+      namespace: "{{clean_namespace}}"
+      name: "{{project_name}}"
+      path: "{{project_slug}}"
+      description: "{{project_name}}"
+    status_code: [200,201,204]
+  register: fork_result
+
+- name: Aguardando o fork do projeto Template Oracle DML
+  ansible.builtin.pause:
+    seconds: 5
+
+- name: Removendo o relacionamento de fork do Template de Oracle DML
+  ansible.builtin.uri:
+    url: "{{ gitlab_url }}/api/v4/projects/{{fork_result.json.id}}/fork"
+    validate_certs: false
+    method: DELETE
+    headers:
+      PRIVATE-TOKEN: "{{ gitlab_token }}"
+    status_code: [200,201,204]
+
+- name: Imprimir result fork
+  debug:
+    msg: '{{ fork_result }}'
+
+######## CRIACAO DO ARQUIVO E MR ###########
+- name: Obter informações do projeto
+  ansible.builtin.set_fact:
+    project_info: '{{ fork_result.json }}'
+    working_branch: 'script-sql-inicial'
+    file_path: 'script/script.sql'
+    commit_message: 'Script adicionado na execução do projeto create-project-dml-aap no Ansible'
+    git_username: 'Ansible Automation'
+    git_email: 'aiops.centroexcelencia@claro.com.br'
+
+- name: Definir variaveis do repositorio
+  ansible.builtin.set_fact:
+    repo_suffix: "{{ project_info.http_url_to_repo | regex_replace('^https?://[^/]+', '') }}"
+
+- name: Criar diretório temporário
+  tempfile:
+    state: directory
+    suffix: gitrepo
+  register: tempdir
+
+- name: Clonar repositório
+  git:
+    repo: "https://oauth2:{{ gitlab_token }}@{{ gitlab_url | regex_replace('^https?://', '') }}{{ repo_suffix }}"
+    dest: "{{ tempdir.path }}"
+    version: "main"
+    accept_hostkey: yes
+
+- name: Definir user.name git
+  git_config:
+    name: user.name
+    scope: local
+    value: "{{ git_username }}"
+    repo: "{{ tempdir.path }}"
+
+- name: Definir user.email git
+  git_config:
+    name: user.email
+    scope: local
+    value: "{{ git_email }}"
+    repo: "{{ tempdir.path }}"
+
+- name: Criar branch para adicionar o arquivo
+  command: git checkout -B "{{ working_branch }}"
+  args:
+    chdir: "{{ tempdir.path }}"
+
+- name: Criar arquivo com o SQL
+  copy:
+    dest: "{{ tempdir.path }}/{{ file_path }}"
+    content: "{{ script }}"
+    force: yes
+
+- name: Adicionar arquivo
+  command: git add "{{ file_path }}"
+  args:
+    chdir: "{{ tempdir.path }}"
+
+- name: Commit do arquivo
+  command: git commit -m "{{ commit_message }}"
+  args:
+    chdir: "{{ tempdir.path }}"
+  register: commit_result
+  failed_when: commit_result.rc not in [0,1]
+
+- name: Push da branch com o arquivo
+  command: git push origin "{{ working_branch }}"
+  args:
+    chdir: "{{ tempdir.path }}"
+
+- name: Criar Merge Request via API
+  uri:
+    url: "{{ gitlab_url }}/api/v4/projects/{{ project_info.id }}/merge_requests"
+    method: POST
+    headers:
+      PRIVATE-TOKEN: "{{ gitlab_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      source_branch: "{{ working_branch }}"
+      target_branch: "main"
+      title: "Adicionando script DML ao projeto"
+      description: "Adicionando script DML enviado pelo Ansible no projeto Create Project MR AAP"
+    status_code: 201
+    validate_certs: false
+  register: mr_result
+
+- name: Mostrando o mr_result
+  debug:
+    var: mr_result
+
+- name: Exibir o MR criado
+  debug:
+    msg: "MR criado: {{ mr_result.json.web_url }}, solicitar aprovação para um aprovador."
+
+- name: Remover diretório temporário
+  file:
+    path: "{{ tempdir.path }}"
+    state: absent
+
+- name: Criando projeto no AAP
+  ansible.controller.project:
+    controller_host: https://aap.claro.com.br
+    aap_token: "{{aap_token}}"
+    validate_certs: false
+    name: "{{project_slug}}"
+    organization: "{{ organization_aap }}"
+    scm_type: git
+    scm_url: "{{fork_result.json.http_url_to_repo}}"
+    credential: "GitLab {{clean_namespace | upper}}"
+    scm_update_on_launch: true
+    allow_override: true
+    scm_update_cache_timeout: 60
+    wait: false
+    state: present
+
+
+#Abaixo, task de delete project no git
+---
+# ================================================================
+# ROLE: git
+# OBJETIVO: Remover projeto do AAP e GitLab de forma segura
+# ================================================================
+
+# ---------------------------------------------------------------------
+# 1️⃣ AJUSTAR E VALIDAR VARIÁVEIS DE ENTRADA
+# ---------------------------------------------------------------------
+
+- name: Ajustar variável organization_aap
+  ansible.builtin.set_fact:
+    clean_namespace: "{{ organization_aap | regex_replace('^ORG-', '') | lower }}"
+
+- name: Validar variável obrigatória 'name_project_aap'
+  fail:
+    msg: "A variável 'name_project_aap' é obrigatória e não foi definida."
+  when: name_project_aap is not defined
+
+- name: Ajustar variáveis de slug e nome do projeto
+  ansible.builtin.set_fact:
+    project_slug: >-
+      {{ name_project_aap
+         | lower
+         | regex_replace('[^a-z0-9]+', '-')
+         | regex_replace('(^-+|-+$)', '')
+         | regex_replace('-+', '-') }}
+    project_name: >-
+      {{ name_project_aap
+         | lower
+         | regex_replace('[^a-z0-9]+', ' ')
+         | title }}
+
+# ---------------------------------------------------------------------
+# 2️⃣ AÇÕES NO AAP (BUSCA E EXCLUSÃO)
+# ---------------------------------------------------------------------
+
+- name: Listar projetos no AAP
+  uri:
+    url: "{{ aap_url }}/projects/?page_size=200"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ aap_token }}"
+      Content-Type: "application/json"
+    return_content: yes
+    validate_certs: no
+  register: aap_projects_response
+
+- name: Parsear lista de projetos do AAP
+  ansible.builtin.set_fact:
+    aap_projects: "{{ aap_projects_response.content | from_json }}"
+
+# --- DEPURAÇÃO OPCIONAL ---
+#- name: Mostrar nomes dos projetos retornados pela API (debug temporário)
+#  debug:
+#    msg: "{{ aap_projects.results | map(attribute='name') | list }}"
+
+# --- BUSCA ROBUSTA POR NOME DO PROJETO ---
+- name: Obter ID do projeto pelo slug (busca case-insensitive)
+  ansible.builtin.set_fact:
+    project_id: >-
+      {{ (
+           aap_projects.results
+           | selectattr('name', 'match', '^' ~ (project_slug | regex_escape) ~ '$', ignorecase=True)
+           | map(attribute='id')
+           | list
+           | first
+         ) | default(None) }}
+
+# --- VERIFICAÇÃO DO RESULTADO ---
+- name: Validar se o projeto foi encontrado
+  debug:
+    msg: >-
+      {% if project_id is not none and project_id|string|length > 0 %}
+      ✅ Projeto '{{ project_slug }}' encontrado no AAP com ID {{ project_id }}.
+      {% else %}
+      ⚠️ Projeto '{{ project_slug }}' não encontrado no AAP. Pulando exclusão.
+      {% endif %}
+
+# ---------------------------------------------------------------------
+# 3️⃣ BLOCO: Exclusão segura do projeto e templates (somente se encontrado)
+# ---------------------------------------------------------------------
+- name: Excluir projeto e templates no AAP (somente se encontrado)
+  when: project_id is not none and project_id|string|length > 0
+  block:
+
+    - name: Listar job templates do AAP
+      uri:
+        url: "{{ aap_url }}/job_templates/?page_size=200"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ aap_token }}"
+          Content-Type: "application/json"
+        return_content: yes
+        validate_certs: no
+        timeout: 60
+      register: aap_templates_response
+
+    - name: Parsear job templates
+      ansible.builtin.set_fact:
+        aap_templates: "{{ aap_templates_response.content | from_json }}"
+
+    - name: Filtrar templates do projeto para excluir
+      ansible.builtin.set_fact:
+        templates_to_delete: >-
+          {{ aap_templates.results
+             | selectattr('project', 'equalto', project_id | int)
+             | map(attribute='id')
+             | list }}
+
+    - name: Mostrar templates para excluir
+      debug:
+        var: templates_to_delete
+
+    - name: Apagar templates do projeto no AAP
+      uri:
+        url: "{{ aap_url }}/job_templates/{{ item }}/"
+        method: DELETE
+        headers:
+          Authorization: "Bearer {{ aap_token }}"
+          Content-Type: "application/json"
+        status_code: 204
+        validate_certs: no
+      loop: "{{ templates_to_delete }}"
+      when: templates_to_delete | length > 0
+
+    - name: Deletar projeto no AAP
+      uri:
+        url: "{{ aap_url }}/projects/{{ project_id }}/"
+        method: DELETE
+        headers:
+          Authorization: "Bearer {{ aap_token }}"
+          Content-Type: "application/json"
+        status_code: 204
+        validate_certs: no
+
+# ---------------------------------------------------------------------
+# 4️⃣ BLOCO: Exclusão no GitLab (executa sempre)
+# ---------------------------------------------------------------------
+- name: Deletar projeto no GitLab
+  community.general.gitlab_project:
+    api_url: "{{ gitlab_url }}"
+    api_token: "{{ gitlab_token }}"
+    name: "{{ name_project_aap }}"
+    group: "{{ clean_namespace }}"
+    path: "{{ name_project_aap | lower | replace(' ', '-') }}"
+    state: absent
+    validate_certs: false
+  when: name_project_aap != ""
+  delegate_to: localhost
+
+
