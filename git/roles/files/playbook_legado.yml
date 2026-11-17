@@ -1,0 +1,36 @@
+---
+- name: Ansible
+  hosts: localhost
+  gather_facts: false
+
+  vars_files:
+    - vars/test_vars.yml 
+    - vars/db_map.yml
+
+  vars:
+    script_path: "script/script.sql"
+
+  tasks:
+
+    - name: Include JIRA role
+      ansible.builtin.include_role:
+        name: dml.oracle_dml.jira  
+      when: platform == 'JIRA'
+
+    - name: Include ITP role
+      ansible.builtin.include_role:
+        name: dml.oracle_dml.itp  
+      when: platform == 'ITP'
+
+    - name: Include OS/OC role
+      ansible.builtin.include_role:
+        name: dml.oracle_dml.os_oc  
+      when: platform == 'OS/OC'
+    
+    - name: Include Oracle role
+      ansible.builtin.include_role:
+        name: oracle_dml
+      when: (
+        executar_oracle_jira | default(false) or 
+        executar_oracle_osoc | default(false) or
+        executar_oracle_itp | default(false))
