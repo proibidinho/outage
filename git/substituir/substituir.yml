@@ -42,14 +42,18 @@
     somente_membro: false              # false = todos os projetos visíveis ao token (admin vê tudo)
     incluir_arquivados: true           # projetos arquivados também podem ter segredos
     limite: 0                          # 0 = todos; N = só os N primeiros (ex.: 5 para um piloto)
-    paralelismo: 4                     # clones/varreduras simultâneos
+    paralelismo: 8                     # clones/varreduras simultâneos
     timeout_clone: 900                 # segundos por clone
 
     # e-mail (mesmo padrão do modelo)
-    email_destino: ""                  # vazio = não envia e-mail
+    email_destino: ""                  # vazio = não envia. Aceita lista YAML/JSON ou texto "a@x.com,b@x.com"
     smtp_host: "vip_smtp.claro.com.br"
     smtp_porta: 25
     email_remetente: "coeeaiops@claro.com.br"
+
+    emails_lista: >-
+      {{ (email_destino if email_destino is not string else (email_destino | replace(';', ',') | split(',')))
+         | map('trim') | reject('equalto', '') | list }}
 
     api: "{{ gitlab_url | regex_replace('/+$', '') }}/api/v4"
     tab: "\t"
@@ -233,7 +237,7 @@
               export LC_ALL=C
 
               um_projeto() {
-                local linha="$1" path url tmp saida ign n r l sha br ln rest arq trecho
+                local linha="$1" path url tmp saida ign n r l sha br ln rest arq lin trecho
                 local -A nomes=()
                 IFS=$'\t' read -r path url <<<"$linha"
                 [[ -z "$path" ]] && return 0
@@ -266,9 +270,9 @@
                   git -C "$tmp/repo.git" grep -I -n -o -i -E --no-color -e "$r" "${!nomes[@]}" -- . "${excl[@]}" 2>/dev/null |
                   sort -u |
                   while IFS= read -r ln; do
-                    sha="${ln%%:*}"; rest="${ln#*:}"; arq="${rest%%:*}"; rest="${rest#*:}"; trecho="${rest#*:}"
+                    sha="${ln%%:*}"; rest="${ln#*:}"; arq="${rest%%:*}"; rest="${rest#*:}"; lin="${rest%%:*}"; trecho="${rest#*:}"
                     [[ -n "$ign" && "$trecho" =~ $ign ]] && continue
-                    printf '%s\t%s\t%s\t%s\n' "$path" "$arq" "$n" "${nomes[$sha]}" >>"$saida.res"
+                    printf '%s\t%s\t%s\t%s\t%s\n' "$path" "$arq" "$n" "${nomes[$sha]}" "$lin" >>"$saida.res"
                   done
                 done <"$WORK/regras.txt"
                 shopt -u nocasematch
@@ -279,7 +283,7 @@
                 sort -u |
                 while IFS= read -r ln; do
                   sha="${ln%%:*}"; arq="${ln#*:}"
-                  printf '%s\t%s\t%s\t%s\n' "$path" "$arq" "arquivo_senha_do_vault" "${nomes[$sha]}" >>"$saida.res"
+                  printf '%s\t%s\t%s\t%s\t%s\n' "$path" "$arq" "arquivo_senha_do_vault" "${nomes[$sha]}" "" >>"$saida.res"
                 done
                 rm -rf "$tmp"
               }
@@ -337,29 +341,55 @@
 
               # agrega: detalhes (texto) + CSV (separador ";" para Excel pt-BR)
               total=$(grep -c . "$tsv")
-              cat "$WORK"/res/*.res 2>/dev/null | sort -u | awk -F'\t' \
+              # agrega por projeto > arquivo > grupo de branches (as linhas são mostradas por branch, pois mudam de uma
+              # branch para outra). Grupos de branches com exatamente as mesmas linhas são juntados.
+              cat "$WORK"/res/*.res 2>/dev/null | sort -u | sort -t$'\t' -k1,1 -k2,2 -k5,5n | awk -F'\t' \
                   -v det="$WORK/detalhes.txt" -v csv="$WORK/relatorio.csv" -v ca="$WORK/com_achado" '
                 function q(s) { gsub(/"/, "\"\"", s); return "\"" s "\"" }
-                BEGIN { printf "\357\273\277projeto;arquivo;regras;branches\n" > csv; printf "" > det }
-                { k=$1 SUBSEP $2
-                  if (!(k in vis)) { vis[k]=1; ord[++n]=k; pj[k]=$1; ar[k]=$2; nf[$1]++ }
-                  if (index("," rg[k] ",", "," $3 ",")==0) rg[k]=rg[k] (rg[k]==""?"":", ") $3
-                  m=split($4, bs, "|"); for (i=1;i<=m;i++) if (index("|" bb[k] "|", "|" bs[i] "|")==0) bb[k]=bb[k] (bb[k]==""?"":"|") bs[i]
+                function add(lst, item, sep) {
+                  if (item == "") return lst
+                  if (index(sep lst sep, sep item sep) == 0) lst = lst (lst == "" ? "" : sep) item
+                  return lst
+                }
+                function corta(lst, sepin, max,   c, p, j, out) {
+                  c = split(lst, p, sepin); out = ""
+                  for (j = 1; j <= c && j <= max; j++) out = out (out == "" ? "" : ", ") p[j]
+                  if (c > max) out = out " (+" c - max ")"
+                  return out
+                }
+                BEGIN { printf "\357\273\277projeto;arquivo;linhas;regras;branches\n" > csv; printf "" > det }
+                { kf = $1 SUBSEP $2
+                  if (!(kf in vis)) { vis[kf]=1; ord[++n]=kf; pj[kf]=$1; ar[kf]=$2; nf[$1]++ }
+                  rg[kf] = add(rg[kf], $3, ",")
+                  kg = kf SUBSEP $4
+                  if (!(kg in gv)) { gv[kg]=1; gl[kf, ++ng[kf]]=$4 }
+                  ll[kg] = add(ll[kg], $5, ",")
                 }
                 END {
-                  for (i=1;i<=n;i++) { k=ord[i]
-                    if (pj[k]!=last) { last=pj[k]; np++; printf "\n== %s  (%d arquivo(s) com possível senha exposta)\n", pj[k], nf[pj[k]] > det }
-                    c=split(bb[k], ba, "|"); lista=""; todas=""
-                    for (j=1;j<=c;j++) { todas=todas (todas==""?"":", ") ba[j]; if (j<=6) lista=lista (lista==""?"":", ") ba[j] }
-                    if (c>6) lista=lista " (+" c-6 " branches)"
-                    printf "   %s\n       regras: %s | branches: %s\n", ar[k], rg[k], lista > det
-                    printf "%s;%s;%s;%s\n", q(pj[k]), q(ar[k]), q(rg[k]), q(todas) > csv
+                  for (i = 1; i <= n; i++) { kf = ord[i]
+                    if (pj[kf] != last) { last = pj[kf]; np++; printf "\n== %s  (%d arquivo(s) com possível senha exposta)\n", pj[kf], nf[pj[kf]] > det }
+                    rs = rg[kf]; gsub(/,/, ", ", rs)
+                    printf "   %s\n       regras: %s\n", ar[kf], rs > det
+                    for (g = 1; g <= ng[kf]; g++) {
+                      L = ll[kf SUBSEP gl[kf, g]]; km = kf SUBSEP L
+                      if (!(km in mi)) { mi[km] = ++nm[kf]; ml[kf, nm[kf]] = L }
+                      mb[kf, mi[km]] = add(mb[kf, mi[km]], "", "|")
+                      c = split(gl[kf, g], bp, "|")
+                      for (j = 1; j <= c; j++) mb[kf, mi[km]] = add(mb[kf, mi[km]], bp[j], "|")
+                    }
+                    for (m = 1; m <= nm[kf]; m++) {
+                      L = ml[kf, m]; B = mb[kf, m]
+                      tela = (L == "" ? "arquivo inteiro" : "linhas " corta(L, ",", 10))
+                      csvl = (L == "" ? "arquivo inteiro" : L); csvb = B; gsub(/\|/, ", ", csvb)
+                      printf "       %s: %s\n", corta(B, "|", 6), tela > det
+                      printf "%s;%s;%s;%s;%s\n", q(pj[kf]), q(ar[kf]), q(csvl), q(rs), q(csvb) > csv
+                    }
                   }
                   print np+0 > ca
                 }'
               cat "$WORK"/res/*.err 2>/dev/null | awk -F'\t' '
                 function q(s) { gsub(/"/, "\"\"", s); return "\"" s "\"" }
-                { printf "%s;%s;%s;%s\n", q($1), q(""), q("falha_ao_clonar: " $2), q("") }' >>"$WORK/relatorio.csv"
+                { printf "%s;%s;%s;%s;%s\n", q($1), q(""), q(""), q("falha_ao_clonar: " $2), q("") }' >>"$WORK/relatorio.csv"
 
               com=$(cat "$WORK/com_achado" 2>/dev/null || echo 0)
               erros=$(ls "$WORK"/res/*.err 2>/dev/null | wc -l)
@@ -373,7 +403,7 @@
                 cat "$WORK"/res/*.err | sort | awk -F'\t' '{ printf "   %s  -> %s\n", $1, $2 }'
               fi
               echo
-              echo "ACHADOS POR PROJETO (arquivo | regras | branches)"
+              echo "ACHADOS POR PROJETO (arquivo | regras | branch: linhas)"
               if [[ "$com" -eq 0 ]]; then echo "   Nenhuma senha exposta encontrada."; else cat "$WORK/detalhes.txt"; fi
               {% endraw %}
 
@@ -401,7 +431,7 @@
             host: "{{ smtp_host }}"
             port: "{{ smtp_porta }}"
             from: "{{ email_remetente }}"
-            to: "{{ email_destino }}"
+            to: "{{ emails_lista }}"
             subject: "VARREDURA DE SENHAS EXPOSTAS GITLAB - {{ now(fmt='%d/%m/%Y %H:%M') }}"
             subtype: plain
             attach:
@@ -427,14 +457,14 @@
               - Arquivo de senha do vault (.vault_pass e similares) sem criptografia
               - Ignorados: conteúdo $ANSIBLE_VAULT, valores !vault e {{ '{{' }} variavel {{ '}}' }}, placeholders de exemplo
 
-              O relatório completo está no anexo relatorio.csv (projeto; arquivo; regras; branches).
+              O relatório completo está no anexo relatorio.csv (projeto; arquivo; linhas; regras; branches).
 
               ====================================================================
               OBSERVAÇÃO
               ====================================================================
               Este é um e-mail automático. A execução é somente leitura: nenhum projeto foi alterado.
               O valor dos segredos não é exibido neste relatório.
-          when: email_destino | length > 0
+          when: emails_lista | length > 0
       always:
         - name: Remover pasta de trabalho (clones, scripts e CSV)
           ansible.builtin.file:
