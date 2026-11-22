@@ -1,73 +1,63 @@
 ---
 # =====================================================================
-# Substitui o playbook.yml LEGADO pelo NOVO nos projetos do GitLab.
-# Roda direto na CLI (não precisa do AAP). Arquivos usados:
-#   files/playbook_legado.yml  -> como o playbook.yml é hoje
-#   files/playbook_novo.yml    -> como ele deve ficar
+# Procura senhas / tokens / chaves expostas em TODAS AS BRANCHES de todos os
+# projetos do GitLab e mostra, por projeto, quais arquivos têm o problema.
+# O valor do segredo nunca é exibido. No final envia o relatório por e-mail (CSV anexo).
 #
-#   export GITLAB_URL=https://gitlab.claro.com.br
-#   # autenticação: use UMA das duas opções
-#   export GITLAB_USER=seu.usuario GITLAB_PASSWORD='sua-senha'   # troca por token OAuth (ver aviso abaixo)
-#   export GITLAB_TOKEN=glpat-xxxxxxxx                           # ou Personal Access Token (escopo "api")
+# Configuração: preencher a seção "vars" abaixo (gitlab_url, gitlab_token ou gitlab_user +
+# gitlab_password, email_destino). Depois criptografar o arquivo inteiro:
+#   ansible-vault encrypt playbook.yml
+# No AAP: associar uma Credential do tipo Vault (com a senha do vault) ao Job Template.
+# Na CLI:  ansible-playbook playbook.yml --ask-vault-pass
+# Somente leitura: apenas busca e envia o relatório por e-mail; não altera nem abre nada nos projetos.
 #
-#   Aviso: a API do GitLab não aceita usuário/senha direto; o playbook usa o fluxo OAuth
-#   "password" (POST /oauth/token). Esse fluxo NÃO funciona com 2FA ativo, e foi marcado
-#   para remoção nas versões self-managed 19.x. Se falhar, só com token.
+# Como funciona: lista os projetos pela API, clona cada um (bare, todas as branches) numa
+# pasta temporária, roda "git grep" com as regras abaixo em cada branch e apaga o clone.
+# Branches com a mesma ponta (mesmo commit) são varridas uma vez só.
+# Precisa no Execution Environment: git, bash, grep, xargs, timeout, awk e community.general.
 #
-#   ansible-playbook substituir.yml                                  # 1) SIMULAÇÃO (padrão, não altera nada)
-#   ansible-playbook substituir.yml -e aplicar=true -e limite=3      # 2) piloto com 3 projetos
-#   ansible-playbook substituir.yml -e aplicar=true                  # 3) execução real
-#   ansible-playbook substituir.yml -e aplicar=true -e modo=mr       #    (ou abrindo um MR por projeto)
-#
-# Sem filtro, varre TODOS os projetos não arquivados que o token enxerga (com
-# token de admin, são todos da instância). Para limitar a um grupo (com
-# subgrupos): -e gitlab_grupo=nome/do/grupo. Token de usuário comum: use
-# -e somente_membro=true para listar só projetos onde ele tem acesso Developer+.
-#
-# Segurança: só altera o projeto cujo playbook.yml for IGUAL ao legado
-# (ignorando apenas CRLF/LF, espaços no fim de linha e linhas em branco no fim
-# do arquivo). Qualquer outro conteúdo é preservado.
-# Ao final grava relatorio_*.csv com o resultado de cada projeto.
+# Ansible Vault: conteúdo criptografado ($ANSIBLE_VAULT;...) não é lido como segredo, e
+# valores "!vault" ou "{{ variavel }}" são ignorados. Em compensação, aparece como achado:
+#   - senha em texto puro dentro de um arquivo de vars que deveria estar criptografado
+#   - arquivo de senha do vault (.vault_pass, vault_password...) commitado SEM criptografia
+# Escopo: só as branches (refs/heads). Não varre tags nem commits que não estejam em branch.
+# Execução somente leitura: nenhum projeto é alterado.
 # =====================================================================
 
-- name: Substituir playbook.yml legado pelo novo nos projetos do GitLab
+- name: Varrer senhas expostas em todas as branches dos projetos do GitLab
   hosts: localhost
   connection: local
   gather_facts: false
 
   vars:
     gitlab_url: "https://gitlab.com.br"
-    gitlab_token: "meu_token"
-    gitlab_user: "meu_user"
-    gitlab_password: "meu_senh"
-    validar_certs: false            # mesmo comportamento do main.yml (certificado interno)
+    gitlab_token: ""                   # PAT de admin com read_api + read_repository (testado primeiro)
+    gitlab_user: ""                    # usados se o token estiver vazio ou for recusado
+    gitlab_password: ""
+    oauth_client_id: ""                # opcional: exigido pelo fluxo password em versões novas do GitLab
+    oauth_client_secret: ""
+    validar_certs: false
 
-    gitlab_grupo: ""                # opcional: restringe a um grupo (id ou path)
-    somente_membro: false           # false = todos os projetos visíveis ao token (admin vê tudo);
-                                    # true  = só onde o dono do token é membro (Developer+)
-    arquivo_alvo: playbook.yaml      # caminho do arquivo dentro de cada repositório
-    limite: 0                       # 0 = todos; N = só os N primeiros (piloto)
+    gitlab_grupo: ""                   # opcional: restringe a um grupo (id ou path, inclui subgrupos)
+    somente_membro: false              # false = todos os projetos visíveis ao token (admin vê tudo)
+    incluir_arquivados: true           # projetos arquivados também podem ter segredos
+    limite: 0                          # 0 = todos; N = só os N primeiros (ex.: 5 para um piloto)
+    paralelismo: 4                     # clones/varreduras simultâneos
+    timeout_clone: 900                 # segundos por clone
 
-    aplicar: false                  # false = simulação; true = altera de verdade
-    modo: commit                    # commit = direto na branch padrão | mr = branch + Merge Request
-    branch_mr: atualiza-playbook-yml
-    pular_ci: false                 # true = adiciona [skip ci] no commit
-
-    git_username: Ansible Automation
-    git_email: aiops.centroexcelencia@claro.com.br
-    commit_message: Atualiza playbook.yml para o novo padrão (tratamento de erro da role oracle_dml)
-    mr_titulo: Atualiza playbook.yml para o novo padrão
-    mr_descricao: Substituição do playbook.yml legado pelo novo padrão, executada via Ansible (CLI).
-
-    arquivo_legado: "{{ playbook_dir }}/files/playbook_legado.yml"
-    arquivo_novo: "{{ playbook_dir }}/files/playbook_novo.yml"
+    # e-mail (mesmo padrão do modelo)
+    email_destino: ""                  # vazio = não envia e-mail
+    smtp_host: "vip_smtp.claro.com.br"
+    smtp_porta: 25
+    email_remetente: "coeeaiops@claro.com.br"
 
     api: "{{ gitlab_url | regex_replace('/+$', '') }}/api/v4"
-    nl: "\n"
+    tab: "\t"
     url_listagem: >-
-      {{ api }}/{{ ('groups/' ~ (gitlab_grupo | string | regex_replace('/', '%2F')) ~ '/projects?include_subgroups=true&archived=false')
-                   if (gitlab_grupo | string | length) > 0
-                   else ('projects?archived=false&membership=true&min_access_level=30' if (somente_membro | bool) else 'projects?archived=false') }}&per_page=100
+      {{ api }}/{{ ('groups/' ~ (gitlab_grupo | string | regex_replace('/', '%2F')) ~ '/projects?include_subgroups=true')
+                   if (gitlab_grupo | string | length) > 0 else 'projects?order_by=id' }}{{
+         '' if (incluir_arquivados | bool) else '&archived=false' }}{{
+         '&membership=true&min_access_level=20' if (somente_membro | bool) else '' }}&per_page=100
 
   tasks:
 
@@ -76,110 +66,129 @@
         that:
           - gitlab_url | length > 0
           - (gitlab_token | length > 0) or ((gitlab_user | length > 0) and (gitlab_password | length > 0))
-          - modo in ['commit', 'mr']
-        fail_msg: Defina GITLAB_URL e GITLAB_TOKEN (ou GITLAB_USER + GITLAB_PASSWORD) e use modo=commit ou modo=mr.
+        fail_msg: Defina gitlab_url e gitlab_token (ou gitlab_user + gitlab_password).
         quiet: true
 
-    - name: Obter token OAuth com usuário e senha
-      when: gitlab_token | length == 0
-      block:
-        - name: Pedir token ao GitLab (fluxo password)
-          ansible.builtin.uri:
-            url: "{{ gitlab_url | regex_replace('/+$', '') }}/oauth/token"
-            method: POST
-            body_format: form-urlencoded
-            body:
-              grant_type: password
-              username: "{{ gitlab_user }}"
-              password: "{{ gitlab_password }}"
-              scope: api
-            validate_certs: "{{ validar_certs | bool }}"
-            status_code: 200
-          register: oauth_resp
-          no_log: true
+    - name: Verificar ferramentas no Execution Environment
+      ansible.builtin.shell: |
+        for c in git bash grep xargs timeout awk sort mktemp; do command -v "$c" >/dev/null 2>&1 || echo "$c"; done
+      register: faltando
+      changed_when: false
 
-        - name: Guardar o token obtido
-          ansible.builtin.set_fact:
-            gitlab_token: "{{ oauth_resp.json.access_token }}"
-          no_log: true
-      rescue:
-        - name: Falha ao autenticar com usuário e senha
-          ansible.builtin.fail:
-            msg: >-
-              Não foi possível obter token com usuário/senha. Causas comuns: senha incorreta, conta com 2FA
-              (o fluxo password é bloqueado), fluxo password desativado/removido nesta versão do GitLab, ou
-              conta de SSO/LDAP. Nesses casos é necessário usar um token (GITLAB_TOKEN).
-
-    # Normalização usada nas comparações (3 cópias idênticas: legado, novo e cada projeto):
-    # remove BOM, converte CRLF/CR em LF, tira espaços no fim das linhas e linhas em branco no
-    # fim do arquivo, e guarda só o SHA-256. Guardar só o hash evita que o {{ }} do conteúdo
-    # dos playbooks seja interpretado como template pelo Ansible.
-    #    - name: Calcular hash do playbook legado e do novo
-    #      ansible.builtin.set_fact:
-    #        hash_legado: >-
-    #          {{ lookup('file', arquivo_legado)
-    #             | regex_replace('^\\ufeff', '')
-    #             | regex_replace('\\r\\n?', '\\n')
-    #             | regex_replace('[ \\t]+$', '', multiline=True)
-    #             | regex_replace('\\s+\\Z', '')
-    #             | hash('sha256') }}
-    #        hash_novo: >-
-    #          {{ lookup('file', arquivo_novo)
-    #             | regex_replace('^\\ufeff', '')
-    #             | regex_replace('\\r\\n?', '\\n')
-    #             | regex_replace('[ \\t]+$', '', multiline=True)
-    #             | regex_replace('\\s+\\Z', '')
-    #             | hash('sha256') }}
-
-    - name: Calcular hash do playbook legado e do novo
-      ansible.builtin.set_fact:
-        hash_legado: >-
-          {{ lookup('file', arquivo_legado)
-             | from_yaml
-             | to_nice_yaml(indent=2)
-             | hash('sha256') }}
-        hash_novo: >-
-          {{ lookup('file', arquivo_novo)
-             | from_yaml
-             | to_nice_yaml(indent=2)
-             | hash('sha256') }}
-
-    - name: Garantir que legado e novo são diferentes
+    - name: Parar se faltar alguma ferramenta
       ansible.builtin.assert:
-        that: hash_legado != hash_novo
-        fail_msg: files/playbook_legado.yml e files/playbook_novo.yml estão iguais; nada a substituir.
+        that: faltando.stdout | length == 0
+        fail_msg: "Faltam no Execution Environment: {{ faltando.stdout_lines | join(', ') }}"
         quiet: true
+
+    # ------------------------- 0) autenticação (token, depois usuário/senha) -------------------------
+    - name: Testar o token informado
+      ansible.builtin.uri:
+        url: "{{ api }}/user"
+        headers:
+          Authorization: "Bearer {{ gitlab_token }}"
+        validate_certs: "{{ validar_certs | bool }}"
+        status_code: [200, 401, 403]
+      register: teste_token
+      failed_when: false
+      when: gitlab_token | length > 0
+      no_log: true
+
+    - name: Guardar o token se foi aceito
+      ansible.builtin.set_fact:
+        token_efetivo: "{{ gitlab_token if (teste_token.status | default(0) | int) == 200 else '' }}"
+      no_log: true
+
+    - name: Obter token OAuth com usuário e senha (fluxo password)
+      ansible.builtin.uri:
+        url: "{{ gitlab_url | regex_replace('/+$', '') }}/oauth/token"
+        method: POST
+        body_format: form-urlencoded
+        body: >-
+          {{ {'grant_type': 'password', 'username': gitlab_user, 'password': gitlab_password,
+              'scope': 'read_api read_repository'}
+             | combine({'client_id': oauth_client_id, 'client_secret': oauth_client_secret}
+                       if (oauth_client_id | length) > 0 else {}) }}
+        validate_certs: "{{ validar_certs | bool }}"
+        status_code: [200, 400, 401, 403]
+      register: oauth_resp
+      failed_when: false
+      when:
+        - token_efetivo | length == 0
+        - gitlab_user | length > 0
+        - gitlab_password | length > 0
+      no_log: true
+
+    - name: Guardar o token OAuth obtido
+      ansible.builtin.set_fact:
+        token_efetivo: "{{ oauth_resp.json.access_token }}"
+      when:
+        - token_efetivo | length == 0
+        - (oauth_resp.status | default(0) | int) == 200
+        - oauth_resp.json.access_token is defined
+      no_log: true
+
+    - name: Parar se nenhum método de autenticação funcionou
+      ansible.builtin.assert:
+        that: token_efetivo | length > 0
+        quiet: true
+        fail_msg: >-
+          Falha na autenticação com o GitLab.
+          Token: {{ 'não informado' if gitlab_token | length == 0 else
+                    ('recusado (HTTP ' ~ teste_token.status ~ ')' if (teste_token.status | default(-1) | int) > 0
+                     else 'erro de conexão: ' ~ (teste_token.msg | default('?'))) }}.
+          Usuário/senha: {{ 'não informados' if oauth_resp is skipped or oauth_resp.status is not defined else
+                            ('recusados (HTTP ' ~ oauth_resp.status ~ ' ' ~ (oauth_resp.json.error | default('')) ~ ')'
+                             if (oauth_resp.status | int) > 0 else 'erro de conexão: ' ~ (oauth_resp.msg | default('?'))) }}.
+          Causas comuns do fluxo password: senha incorreta, conta com 2FA, conta SSO/LDAP, fluxo desativado
+          ou exigindo oauth_client_id/oauth_client_secret nesta versão do GitLab.
 
     # ------------------------- 1) levantar os projetos -------------------------
     - name: Listar projetos - página 1
       ansible.builtin.uri:
         url: "{{ url_listagem }}&page=1"
         headers:
-          Authorization: "Bearer {{ gitlab_token }}"
+          Authorization: "Bearer {{ token_efetivo }}"
         validate_certs: "{{ validar_certs | bool }}"
         status_code: 200
       register: pagina_1
+      failed_when: false
+      no_log: true
 
-    - name: Validar paginação
+    - name: Validar listagem e paginação
       ansible.builtin.assert:
-        that: pagina_1.x_total_pages is defined or (pagina_1.json | length) < 100
-        fail_msg: A API não devolveu X-Total-Pages; não dá para garantir que todos os projetos foram listados.
+        that:
+          - (pagina_1.status | default(-1) | int) == 200
+          - pagina_1.x_total_pages is defined or (pagina_1.json | length) < 100
+        fail_msg: >-
+          Falha ao listar projetos (HTTP {{ pagina_1.status | default('?') }} {{ pagina_1.msg | default('') }}),
+          ou a API não devolveu X-Total-Pages (não dá para garantir que todos os projetos foram listados).
         quiet: true
 
     - name: Listar projetos - demais páginas
       ansible.builtin.uri:
         url: "{{ url_listagem }}&page={{ item }}"
         headers:
-          Authorization: "Bearer {{ gitlab_token }}"
+          Authorization: "Bearer {{ token_efetivo }}"
         validate_certs: "{{ validar_certs | bool }}"
         status_code: 200
       loop: "{{ range(2, (pagina_1.x_total_pages | default(1) | int) + 1) | list }}"
       register: demais_paginas
+      failed_when: false
+      no_log: true
+
+    - name: Validar demais páginas
+      ansible.builtin.assert:
+        that: demais_paginas.results | default([]) | rejectattr('status', 'equalto', 200) | list | length == 0
+        fail_msg: >-
+          Falha ao listar as páginas {{ demais_paginas.results | rejectattr('status', 'equalto', 200)
+          | map(attribute='item') | join(', ') }} de projetos.
+        quiet: true
 
     - name: Consolidar projetos (sem repositórios vazios)
       ansible.builtin.set_fact:
         projetos_alvo: >-
-          {{ (pagina_1.json + (demais_paginas.results | map(attribute='json') | flatten))
+          {{ (pagina_1.json + (demais_paginas.results | default([]) | map(attribute='json') | flatten))
              | unique(attribute='id')
              | rejectattr('default_branch', 'none')
              | sort(attribute='path_with_namespace')
@@ -189,210 +198,246 @@
       ansible.builtin.set_fact:
         projetos_alvo: "{{ projetos_alvo if (limite | int) == 0 else projetos_alvo[:(limite | int)] }}"
 
-    - name: Resumo do escopo
-      ansible.builtin.debug:
-        msg: >-
-          {{ projetos_alvo | length }} projeto(s) a analisar.
-          Modo: {{ 'APLICAR (' ~ modo ~ ')' if (aplicar | bool) else 'SIMULAÇÃO (nada será alterado)' }}.
+    # ------------------------- 2) varrer todas as branches -------------------------
+    - name: Varrer os projetos
+      block:
+        - name: Criar pasta de trabalho temporária
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: varredura_segredos_
+          register: trabalho
 
-    # ------------------------- 2) ler e comparar cada playbook -------------------------
-    - name: Ler o playbook de cada projeto (branch padrão)
-      ansible.builtin.uri:
-        url: "{{ api }}/projects/{{ item.id }}/repository/files/{{ arquivo_alvo | regex_replace('/', '%2F') }}?ref={{ item.default_branch | regex_replace('/', '%2F') }}"
-        headers:
-          Authorization: "Bearer {{ gitlab_token }}"
-        validate_certs: "{{ validar_certs | bool }}"
-        status_code: [200, 404]
-      failed_when: false
-      loop: "{{ projetos_alvo }}"
-      loop_control:
-        label: "{{ item.path_with_namespace }}"
-      register: arquivos
+        - name: Resumo do escopo
+          ansible.builtin.debug:
+            msg: "{{ projetos_alvo | length }} projeto(s), {{ paralelismo }} em paralelo. Pode demorar."
 
-    - name: Inicializar tabela de hashes
-      ansible.builtin.set_fact:
-        info: {}
+        - name: Gravar lista de projetos (caminho e url git)
+          ansible.builtin.copy:
+            dest: "{{ trabalho.path }}/projetos.tsv"
+            mode: "0600"
+            content: |-
+              {% for p in projetos_alvo -%}
+              {{ p.path_with_namespace }}{{ tab }}{{ p.http_url_to_repo }}
+              {% endfor %}
 
-    - name: Calcular o hash do playbook de cada projeto
-      ansible.builtin.set_fact:
-        info: >-
-          {{ info | combine({ (item.item.id | string): {
-               'http': (item.status | default(0) | int),
-               'commit': (item.json.last_commit_id | default('')),
-               'sha': (((item.json.content | b64decode)
-                        | from_yaml
-                        | to_nice_yaml(indent=2)
-                        | hash('sha256'))
-                       if (item.status | default(0) | int) == 200 else '')
-             } }) }}
-      loop: "{{ arquivos.results }}"
-      loop_control:
-        label: "{{ item.item.path_with_namespace }}"
+        - name: Gravar o script de varredura
+          ansible.builtin.copy:
+            dest: "{{ trabalho.path }}/varrer.sh"
+            mode: "0700"
+            content: |
+              {% raw %}#!/usr/bin/env bash
+              # Varredura de senhas/segredos em TODAS as branches de vários projetos GitLab.
+              # Uso: varrer.sh <projetos.tsv> <paralelismo>      (tsv: caminho<TAB>url_git)
+              # Env: GITLAB_TOKEN (só via GIT_ASKPASS), VALIDAR_CERTS=true|false, WORK, TIMEOUT_CLONE
+              # Só imprime projeto / arquivo / regra / branches. O valor encontrado nunca é exibido.
+              export LC_ALL=C
 
+              um_projeto() {
+                local linha="$1" path url tmp saida ign n r l sha br ln rest arq trecho
+                local -A nomes=()
+                IFS=$'\t' read -r path url <<<"$linha"
+                [[ -z "$path" ]] && return 0
+                tmp=$(mktemp -d "$WORK/clone.XXXXXX")
+                saida="$WORK/res/$(printf '%s' "$path" | tr '/ ' '__')"
+                : >"$saida.res"
+                echo "$(date +%T) $path" >>"$WORK/progresso.log"
 
+                if ! timeout "${TIMEOUT_CLONE:-900}" git clone --quiet --bare "$url" "$tmp/repo.git" >/dev/null 2>"$tmp/err"; then
+                  printf '%s\t%s\n' "$path" "$(tr '\n\t' '  ' <"$tmp/err" | cut -c1-140)" >"$saida.err"
+                  rm -rf "$tmp"; return 0
+                fi
 
-          #    - name: Calcular o hash do playbook de cada projeto
-          #      ansible.builtin.set_fact:
-          #        info: >-
-          #          {{ info | combine({ (item.item.id | string): {
-          #               'http': (item.status | default(0) | int),
-          #               'commit': (item.json.last_commit_id | default('')),
-          #               'sha': (((item.json.content | b64decode)
-          #                        | regex_replace('^\\ufeff', '')
-          #                        | regex_replace('\\r\\n?', '\\n')
-          #                        | regex_replace('[ \\t]+$', '', multiline=True)
-          #                        | regex_replace('\\s+\\Z', '')
-          #                        | hash('sha256')) if (item.status | default(0) | int) == 200 else '')
-          #             } }) }}
-          #      loop: "{{ arquivos.results }}"
-          #      loop_control:
-          #        label: "{{ item.item.path_with_namespace }}"
+                # branches agrupadas pelo commit da ponta (branches iguais são varridas uma vez só)
+                while read -r sha br; do nomes[$sha]+="${nomes[$sha]:+|}$br"; done \
+                  < <(git -C "$tmp/repo.git" for-each-ref --format='%(objectname) %(refname:short)' refs/heads)
+                if [[ ${#nomes[@]} -eq 0 ]]; then rm -rf "$tmp"; return 0; fi
 
-    - name: Separar os projetos idênticos ao legado
-      ansible.builtin.set_fact:
-        ids_legado: "{{ info | dict2items | selectattr('value.sha', 'equalto', hash_legado) | map(attribute='key') | map('int') | list }}"
+                ign=""
+                while IFS= read -r l; do
+                  [[ "$l" == IGNORAR\ :::\ * ]] && ign+="${ign:+|}(${l#IGNORAR ::: })"
+                done <"$WORK/regras.txt"
 
-    - name: Lista final de projetos a substituir
-      ansible.builtin.set_fact:
-        alvos: "{{ projetos_alvo | selectattr('id', 'in', ids_legado) | list }}"
+                local excl=(':(exclude,glob)**/node_modules/**' ':(exclude,glob)**/*.min.js' ':(exclude,glob)**/*.map'
+                            ':(exclude,glob)**/package-lock.json' ':(exclude,glob)**/yarn.lock')
+                shopt -s nocasematch
+                while IFS= read -r l; do
+                  [[ -z "$l" || "$l" == \#* || "$l" == IGNORAR\ :::\ * || "$l" != *" ::: "* ]] && continue
+                  n="${l%% ::: *}"; n="${n%"${n##*[![:space:]]}"}"; r="${l#* ::: }"
+                  git -C "$tmp/repo.git" grep -I -n -o -i -E --no-color -e "$r" "${!nomes[@]}" -- . "${excl[@]}" 2>/dev/null |
+                  sort -u |
+                  while IFS= read -r ln; do
+                    sha="${ln%%:*}"; rest="${ln#*:}"; arq="${rest%%:*}"; rest="${rest#*:}"; trecho="${rest#*:}"
+                    [[ -n "$ign" && "$trecho" =~ $ign ]] && continue
+                    printf '%s\t%s\t%s\t%s\n' "$path" "$arq" "$n" "${nomes[$sha]}" >>"$saida.res"
+                  done
+                done <"$WORK/regras.txt"
+                shopt -u nocasematch
 
-    - name: Resumo da comparação
-      ansible.builtin.debug:
-        msg: |-
-          Analisados ................: {{ projetos_alvo | length }}
-          Idênticos ao legado .......: {{ alvos | length }}   <- serão substituídos
-          Já com o playbook novo ....: {{ info.values() | selectattr('sha', 'equalto', hash_novo) | list | length }}
-          Sem {{ arquivo_alvo }} ....: {{ info.values() | selectattr('http', 'equalto', 404) | list | length }}
-          Erro de leitura ...........: {{ info.values() | rejectattr('http', 'in', [200, 404]) | list | length }}
-          Diferentes (preservados) ..: {{ (projetos_alvo | length) - (alvos | length) - (info.values() | selectattr('sha', 'equalto', hash_novo) | list | length) - (info.values() | selectattr('http', 'equalto', 404) | list | length) - (info.values() | rejectattr('http', 'in', [200, 404]) | list | length) }}
+                # arquivo com nome de "senha do vault" (.vault_pass etc.) que NÃO está criptografado
+                git -C "$tmp/repo.git" grep -I -L -e '^\$ANSIBLE_VAULT;' "${!nomes[@]}" -- \
+                    ':(icase,glob)**/*vault*pass*' ':(icase,glob)**/*vault*secret*' ':(icase,glob)**/.vault*' 2>/dev/null |
+                sort -u |
+                while IFS= read -r ln; do
+                  sha="${ln%%:*}"; arq="${ln#*:}"
+                  printf '%s\t%s\t%s\t%s\n' "$path" "$arq" "arquivo_senha_do_vault" "${nomes[$sha]}" >>"$saida.res"
+                done
+                rm -rf "$tmp"
+              }
 
-    # ------------------------- 3) aplicar -------------------------
-    - name: Substituir via commit na branch padrão
-      ansible.builtin.uri:
-        url: "{{ api }}/projects/{{ item.id }}/repository/files/{{ arquivo_alvo | regex_replace('/', '%2F') }}"
-        method: PUT
-        headers:
-          Authorization: "Bearer {{ gitlab_token }}"
-        body_format: json
-        body:
-          branch: "{{ item.default_branch }}"
-          content: "{{ lookup('file', arquivo_novo) | trim }}{{ nl }}"
-          commit_message: "{{ commit_message }}{{ ' [skip ci]' if (pular_ci | bool) else '' }}"
-          author_name: "{{ git_username }}"
-          author_email: "{{ git_email }}"
-          last_commit_id: "{{ info[item.id | string].commit }}"
-        validate_certs: "{{ validar_certs | bool }}"
-        status_code: 200
-      failed_when: false
-      loop: "{{ alvos if ((aplicar | bool) and modo == 'commit') else [] }}"
-      loop_control:
-        label: "{{ item.path_with_namespace }}"
-      register: commit_resp
+              if [[ "${1:-}" == "--um" ]]; then um_projeto "$2"; exit 0; fi
 
-    - name: Substituir em nova branch (start_branch cria a branch a partir da padrão)
-      ansible.builtin.uri:
-        url: "{{ api }}/projects/{{ item.id }}/repository/files/{{ arquivo_alvo | regex_replace('/', '%2F') }}"
-        method: PUT
-        headers:
-          Authorization: "Bearer {{ gitlab_token }}"
-        body_format: json
-        body:
-          branch: "{{ branch_mr }}"
-          start_branch: "{{ item.default_branch }}"
-          content: "{{ lookup('file', arquivo_novo) | trim }}{{ nl }}"
-          commit_message: "{{ commit_message }}{{ ' [skip ci]' if (pular_ci | bool) else '' }}"
-          author_name: "{{ git_username }}"
-          author_email: "{{ git_email }}"
-          last_commit_id: "{{ info[item.id | string].commit }}"
-        validate_certs: "{{ validar_certs | bool }}"
-        status_code: 200
-      failed_when: false
-      loop: "{{ alvos if ((aplicar | bool) and modo == 'mr') else [] }}"
-      loop_control:
-        label: "{{ item.path_with_namespace }}"
-      register: branch_resp
+              tsv="${1:?informe o projetos.tsv}"; par="${2:-4}"
+              export WORK="${WORK:?}"; mkdir -p "$WORK/res"; : >"$WORK/progresso.log"
 
-    - name: Definir projetos com branch criada
-      ansible.builtin.set_fact:
-        ids_branch_ok: "{{ branch_resp.results | selectattr('status', 'equalto', 200) | map(attribute='item.id') | list }}"
+              cat >"$WORK/regras.txt" <<'REGRAS_EOF'
+              # Formato:  nome ::: regex   (ERE, sem diferenciar maiúsculas)  |  IGNORAR ::: regex  descarta falso positivo
+              # Linhas "IGNORAR" descartam achados cujo TRECHO encontrado bata com a regex (reduz falso positivo).
 
-    - name: Criar Merge Request
-      ansible.builtin.uri:
-        url: "{{ api }}/projects/{{ item.id }}/merge_requests"
-        method: POST
-        headers:
-          Authorization: "Bearer {{ gitlab_token }}"
-        body_format: json
-        body:
-          source_branch: "{{ branch_mr }}"
-          target_branch: "{{ item.default_branch }}"
-          title: "{{ mr_titulo }}"
-          description: "{{ mr_descricao }}"
-          remove_source_branch: true
-        validate_certs: "{{ validar_certs | bool }}"
-        status_code: 201
-      failed_when: false
-      loop: "{{ alvos | selectattr('id', 'in', ids_branch_ok) | list }}"
-      loop_control:
-        label: "{{ item.path_with_namespace }}"
-      register: mr_resp
+              # ---------------------------- segredos com formato próprio ----------------------------
+              chave_privada          ::: -----BEGIN ([A-Z]+ )?PRIVATE KEY( BLOCK)?-----
+              aws_access_key         ::: \b(AKIA|ASIA)[0-9A-Z]{16}\b
+              gitlab_token           ::: \bglpat-[0-9A-Za-z_-]{20,}
+              github_token           ::: \bgh[pousr]_[0-9A-Za-z]{30,}
+              slack_token            ::: \bxox[abprs]-[0-9A-Za-z-]{10,}
+              header_authorization   ::: authorization:[[:space:]]*(basic|bearer)[[:space:]]+[a-z0-9+/=._-]{12,}
 
-    # ------------------------- 4) relatório -------------------------
-    - name: Inicializar resultados
-      ansible.builtin.set_fact:
-        resultado: {}
+              # ---------------------------- senha embutida em texto ----------------------------
+              # protocolo://usuario:senha@host   (ignora {{ }}, $VAR e <placeholder>)
+              url_com_credencial     ::: [a-z][a-z0-9+.-]*://[^/[:space:]:@'"]+:[^/[:space:]:@'"{$<][^/[:space:]:@'"]{2,}@[^[:space:]'"]+
+              # usuario/senha@servico  (estilo sqlplus / Oracle)
+              oracle_usuario_senha   ::: \b[a-z][a-z0-9_$#]{1,29}/[^[:space:]@/'"{$<][^[:space:]@/'"]{2,}@[a-z0-9_.-]+(:[0-9]+)?(/[a-z0-9_.]+)?
+              # CREATE/ALTER USER ... IDENTIFIED BY senha
+              sql_identified_by      ::: identified[[:space:]]+by[[:space:]]+['"]?[^[:space:]'";{$<:][^[:space:]'";]{2,}
+              # senha: valor  /  senha = "valor"  /  "password": "valor"  (não pode COMEÇAR com { $ < ! #, que indicam variável/vault)
+              senha_atribuida        ::: (senha|password|passwd|passw|pwd|secret|segredo)[a-z0-9_.-]*['"]?[[:space:]]*[:=][[:space:]]*['"]?[^[:space:]'"{$<!#,;)][^[:space:]'"]{3,}
+              token_atribuido        ::: (api[_-]?key|apikey|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?token)[a-z0-9_.-]*['"]?[[:space:]]*[:=][[:space:]]*['"]?[^[:space:]'"{$<!#,;)][^[:space:]'"]{7,}
+              sshpass_inline         ::: sshpass[[:space:]]+-p[[:space:]]*['"]?[^[:space:]'"{$]{3,}
 
-    - name: Registrar resultado do commit / branch
-      ansible.builtin.set_fact:
-        resultado: >-
-          {{ resultado | combine({ (item.item.id | string): {
-               'resultado': (('SUBSTITUIDO' if modo == 'commit' else 'BRANCH_CRIADA') if (item.status | default(0) | int) == 200 else 'ERRO'),
-               'mr_url': '',
-               'detalhe': ('' if (item.status | default(0) | int) == 200
-                           else ((item.json.message | default(item.msg | default(''))) | string | replace('{', '(') | replace('}', ')')))
-             } }) }}
-      loop: "{{ commit_resp.results + branch_resp.results }}"
-      loop_control:
-        label: "{{ item.item.path_with_namespace }}"
+              # ---------------------------- filtros de falso positivo ----------------------------
+              # valores de exemplo / placeholder
+              IGNORAR ::: (changeme|change_me|example|exemplo|sample|dummy|placeholder|your[_-]|seu[_-]|minha_senha|sua_senha|senha_aqui|password_here|xxxx|\*\*\*|\.\.\.)
+              # valor é só um tipo/palavra reservada (password: str, senha: null, token: vault ...)
+              IGNORAR ::: [:=][[:space:]]*['"]?(str|string|int|integer|bool|boolean|none|null|nil|true|false|yes|no|required|obrigatorio|vault|lookup|env|var|vars|item|omit|undefined|default|password|senha|secret|token)['"]?$
+              # valor parece caminho ou nome de arquivo
+              IGNORAR ::: [:=][[:space:]]*['"]?(~|\.|/[^/])
+              IGNORAR ::: \.(ya?ml|txt|json|pem|key|vault|ini|cfg|conf|j2)['"]?$
+              # chaves que não guardam a senha em si (password_file, secret_name, token_length ...)
+              IGNORAR ::: (password|senha|passwd|pwd|secret|token)[a-z0-9]*_(file|path|var|name|env|prompt|length|policy|expir[a-z]*|field|label|hash|url|id|source|ref)[a-z0-9_.-]*['"]?[[:space:]]*[:=]
+              REGRAS_EOF
 
-    - name: Registrar resultado do Merge Request
-      ansible.builtin.set_fact:
-        resultado: >-
-          {{ resultado | combine({ (item.item.id | string): {
-               'resultado': ('MR_CRIADO' if (item.status | default(0) | int) == 201 else 'ERRO'),
-               'mr_url': (item.json.web_url | default('') if (item.status | default(0) | int) == 201 else ''),
-               'detalhe': ('' if (item.status | default(0) | int) == 201
-                           else ((item.json.message | default(item.msg | default(''))) | string | replace('{', '(') | replace('}', ')')))
-             } }) }}
-      loop: "{{ mr_resp.results }}"
-      loop_control:
-        label: "{{ item.item.path_with_namespace }}"
+              cat >"$WORK/askpass.sh" <<'ASK_EOF'
+              #!/bin/sh
+              case "$1" in Username*) echo oauth2 ;; *) echo "$GITLAB_TOKEN" ;; esac
+              ASK_EOF
+              chmod 700 "$WORK/askpass.sh"
+              export GIT_ASKPASS="$WORK/askpass.sh" GIT_TERMINAL_PROMPT=0
+              [[ "${VALIDAR_CERTS:-false}" == "true" ]] || export GIT_SSL_NO_VERIFY=1
 
-    - name: Gravar relatório CSV
-      ansible.builtin.copy:
-        dest: "{{ playbook_dir }}/relatorio_{{ 'aplicado' if (aplicar | bool) else 'simulacao' }}_{{ now(fmt='%Y%m%d_%H%M%S') }}.csv"
-        mode: "0644"
-        content: |-
-          projeto;id;branch;estado;resultado;mr_url;detalhe
-          {% for p in projetos_alvo -%}
-          {% set i = info[p.id | string] -%}
-          {% set e = 'ERRO_LEITURA' if i.http not in [200, 404] else ('SEM_PLAYBOOK' if i.http == 404 else ('IGUAL_AO_LEGADO' if i.sha == hash_legado else ('JA_ATUALIZADO' if i.sha == hash_novo else 'DIFERENTE_DO_LEGADO'))) -%}
-          {% set r = resultado[p.id | string] | default({}) -%}
-          {{ p.path_with_namespace }};{{ p.id }};{{ p.default_branch }};{{ e }};{{ r.resultado | default('A_SUBSTITUIR' if (e == 'IGUAL_AO_LEGADO' and not (aplicar | bool)) else '') }};{{ r.mr_url | default('') }};{{ r.detalhe | default('') | replace(';', ',') | replace('\n', ' ') }}
-          {% endfor %}
-      register: relatorio
+              xargs -P "$par" -d '\n' -n1 bash "$0" --um <"$tsv"
 
-    - name: Resultado final
-      ansible.builtin.debug:
-        msg: >-
-          {{ 'Simulação concluída: nada foi alterado.' if not (aplicar | bool)
-             else (resultado.values() | rejectattr('resultado', 'equalto', 'ERRO') | list | length) ~ ' projeto(s) processado(s) com sucesso, '
-                  ~ (resultado.values() | selectattr('resultado', 'equalto', 'ERRO') | list | length) ~ ' com erro.' }}
-          Relatório: {{ relatorio.dest }}
+              # agrega: detalhes (texto) + CSV (separador ";" para Excel pt-BR)
+              total=$(grep -c . "$tsv")
+              cat "$WORK"/res/*.res 2>/dev/null | sort -u | awk -F'\t' \
+                  -v det="$WORK/detalhes.txt" -v csv="$WORK/relatorio.csv" -v ca="$WORK/com_achado" '
+                function q(s) { gsub(/"/, "\"\"", s); return "\"" s "\"" }
+                BEGIN { printf "\357\273\277projeto;arquivo;regras;branches\n" > csv; printf "" > det }
+                { k=$1 SUBSEP $2
+                  if (!(k in vis)) { vis[k]=1; ord[++n]=k; pj[k]=$1; ar[k]=$2; nf[$1]++ }
+                  if (index("," rg[k] ",", "," $3 ",")==0) rg[k]=rg[k] (rg[k]==""?"":", ") $3
+                  m=split($4, bs, "|"); for (i=1;i<=m;i++) if (index("|" bb[k] "|", "|" bs[i] "|")==0) bb[k]=bb[k] (bb[k]==""?"":"|") bs[i]
+                }
+                END {
+                  for (i=1;i<=n;i++) { k=ord[i]
+                    if (pj[k]!=last) { last=pj[k]; np++; printf "\n== %s  (%d arquivo(s) com possível senha exposta)\n", pj[k], nf[pj[k]] > det }
+                    c=split(bb[k], ba, "|"); lista=""; todas=""
+                    for (j=1;j<=c;j++) { todas=todas (todas==""?"":", ") ba[j]; if (j<=6) lista=lista (lista==""?"":", ") ba[j] }
+                    if (c>6) lista=lista " (+" c-6 " branches)"
+                    printf "   %s\n       regras: %s | branches: %s\n", ar[k], rg[k], lista > det
+                    printf "%s;%s;%s;%s\n", q(pj[k]), q(ar[k]), q(rg[k]), q(todas) > csv
+                  }
+                  print np+0 > ca
+                }'
+              cat "$WORK"/res/*.err 2>/dev/null | awk -F'\t' '
+                function q(s) { gsub(/"/, "\"\"", s); return "\"" s "\"" }
+                { printf "%s;%s;%s;%s\n", q($1), q(""), q("falha_ao_clonar: " $2), q("") }' >>"$WORK/relatorio.csv"
 
-    - name: Falhar se algum projeto deu erro
-      ansible.builtin.fail:
-        msg: Houve projetos com ERRO (leitura ou escrita). Veja o relatório {{ relatorio.dest }}.
-      when: >-
-        (resultado.values() | selectattr('resultado', 'equalto', 'ERRO') | list | length) > 0
-        or (info.values() | rejectattr('http', 'in', [200, 404]) | list | length) > 0
+              com=$(cat "$WORK/com_achado" 2>/dev/null || echo 0)
+              erros=$(ls "$WORK"/res/*.err 2>/dev/null | wc -l)
+              echo "RESUMO"
+              echo "Projetos analisados .......: $total"
+              echo "Projetos com achados ......: $com"
+              echo "Falha ao clonar ...........: $erros"
+              if [[ "$erros" -gt 0 ]]; then
+                echo
+                echo "Projetos que não foram clonados (verifique permissão/timeout):"
+                cat "$WORK"/res/*.err | sort | awk -F'\t' '{ printf "   %s  -> %s\n", $1, $2 }'
+              fi
+              echo
+              echo "ACHADOS POR PROJETO (arquivo | regras | branches)"
+              if [[ "$com" -eq 0 ]]; then echo "   Nenhuma senha exposta encontrada."; else cat "$WORK/detalhes.txt"; fi
+              {% endraw %}
+
+        - name: Rodar a varredura
+          ansible.builtin.command:
+            argv:
+              - bash
+              - "{{ trabalho.path }}/varrer.sh"
+              - "{{ trabalho.path }}/projetos.tsv"
+              - "{{ paralelismo }}"
+          environment:
+            GITLAB_TOKEN: "{{ token_efetivo }}"
+            VALIDAR_CERTS: "{{ validar_certs | bool | lower }}"
+            WORK: "{{ trabalho.path }}"
+            TIMEOUT_CLONE: "{{ timeout_clone }}"
+          changed_when: false
+          register: varredura
+
+        - name: Projetos e arquivos com senha exposta
+          ansible.builtin.debug:
+            msg: "{{ varredura.stdout_lines }}"
+
+        - name: Enviar relatório por e-mail
+          community.general.mail:
+            host: "{{ smtp_host }}"
+            port: "{{ smtp_porta }}"
+            from: "{{ email_remetente }}"
+            to: "{{ email_destino }}"
+            subject: "VARREDURA DE SENHAS EXPOSTAS GITLAB - {{ now(fmt='%d/%m/%Y %H:%M') }}"
+            subtype: plain
+            attach:
+              - "{{ trabalho.path }}/relatorio.csv"
+            body: |
+              ====================================================================
+              VARREDURA DE SENHAS EXPOSTAS - GITLAB
+              ====================================================================
+              Instância ..: {{ gitlab_url }}
+              Escopo .....: {{ ('grupo ' ~ gitlab_grupo ~ ' (com subgrupos)') if (gitlab_grupo | string | length) > 0 else 'todos os projetos visíveis' }}{{ (' - piloto com ' ~ limite ~ ' projeto(s)') if (limite | int) > 0 else '' }}
+              Branches ...: todas (refs/heads)
+              Data .......: {{ now(fmt='%d/%m/%Y %H:%M') }}
+
+              ====================================================================
+              {{ varredura.stdout }}
+
+              ====================================================================
+              CRITÉRIOS
+              ====================================================================
+              - Senha/token atribuído em texto (senha=, password:, api_key=, client_secret= ...)
+              - Chave privada, tokens GitLab/GitHub/Slack/AWS, header Authorization
+              - usuario:senha@host, usuario/senha@servico (Oracle), IDENTIFIED BY, sshpass -p
+              - Arquivo de senha do vault (.vault_pass e similares) sem criptografia
+              - Ignorados: conteúdo $ANSIBLE_VAULT, valores !vault e {{ '{{' }} variavel {{ '}}' }}, placeholders de exemplo
+
+              O relatório completo está no anexo relatorio.csv (projeto; arquivo; regras; branches).
+
+              ====================================================================
+              OBSERVAÇÃO
+              ====================================================================
+              Este é um e-mail automático. A execução é somente leitura: nenhum projeto foi alterado.
+              O valor dos segredos não é exibido neste relatório.
+          when: email_destino | length > 0
+      always:
+        - name: Remover pasta de trabalho (clones, scripts e CSV)
+          ansible.builtin.file:
+            path: "{{ trabalho.path }}"
+            state: absent
+          when: trabalho.path is defined
