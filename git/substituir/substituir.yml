@@ -36,16 +36,16 @@
   gather_facts: false
 
   vars:
-    gitlab_url: "{{ lookup('env', 'GITLAB_URL') }}"
-    gitlab_token: "{{ lookup('env', 'GITLAB_TOKEN') }}"
-    gitlab_user: "{{ lookup('env', 'GITLAB_USER') }}"
-    gitlab_password: "{{ lookup('env', 'GITLAB_PASSWORD') }}"
+    gitlab_url: "https://gitlab.com.br"
+    gitlab_token: "meu_token"
+    gitlab_user: "meu_user"
+    gitlab_password: "meu_senh"
     validar_certs: false            # mesmo comportamento do main.yml (certificado interno)
 
     gitlab_grupo: ""                # opcional: restringe a um grupo (id ou path)
     somente_membro: false           # false = todos os projetos visíveis ao token (admin vê tudo);
                                     # true  = só onde o dono do token é membro (Developer+)
-    arquivo_alvo: playbook.yml      # caminho do arquivo dentro de cada repositório
+    arquivo_alvo: playbook.yaml      # caminho do arquivo dentro de cada repositório
     limite: 0                       # 0 = todos; N = só os N primeiros (piloto)
 
     aplicar: false                  # false = simulação; true = altera de verdade
@@ -114,21 +114,34 @@
     # remove BOM, converte CRLF/CR em LF, tira espaços no fim das linhas e linhas em branco no
     # fim do arquivo, e guarda só o SHA-256. Guardar só o hash evita que o {{ }} do conteúdo
     # dos playbooks seja interpretado como template pelo Ansible.
+    #    - name: Calcular hash do playbook legado e do novo
+    #      ansible.builtin.set_fact:
+    #        hash_legado: >-
+    #          {{ lookup('file', arquivo_legado)
+    #             | regex_replace('^\\ufeff', '')
+    #             | regex_replace('\\r\\n?', '\\n')
+    #             | regex_replace('[ \\t]+$', '', multiline=True)
+    #             | regex_replace('\\s+\\Z', '')
+    #             | hash('sha256') }}
+    #        hash_novo: >-
+    #          {{ lookup('file', arquivo_novo)
+    #             | regex_replace('^\\ufeff', '')
+    #             | regex_replace('\\r\\n?', '\\n')
+    #             | regex_replace('[ \\t]+$', '', multiline=True)
+    #             | regex_replace('\\s+\\Z', '')
+    #             | hash('sha256') }}
+
     - name: Calcular hash do playbook legado e do novo
       ansible.builtin.set_fact:
         hash_legado: >-
           {{ lookup('file', arquivo_legado)
-             | regex_replace('^\\ufeff', '')
-             | regex_replace('\\r\\n?', '\\n')
-             | regex_replace('[ \\t]+$', '', multiline=True)
-             | regex_replace('\\s+\\Z', '')
+             | from_yaml
+             | to_nice_yaml(indent=2)
              | hash('sha256') }}
         hash_novo: >-
           {{ lookup('file', arquivo_novo)
-             | regex_replace('^\\ufeff', '')
-             | regex_replace('\\r\\n?', '\\n')
-             | regex_replace('[ \\t]+$', '', multiline=True)
-             | regex_replace('\\s+\\Z', '')
+             | from_yaml
+             | to_nice_yaml(indent=2)
              | hash('sha256') }}
 
     - name: Garantir que legado e novo são diferentes
@@ -207,15 +220,33 @@
                'http': (item.status | default(0) | int),
                'commit': (item.json.last_commit_id | default('')),
                'sha': (((item.json.content | b64decode)
-                        | regex_replace('^\\ufeff', '')
-                        | regex_replace('\\r\\n?', '\\n')
-                        | regex_replace('[ \\t]+$', '', multiline=True)
-                        | regex_replace('\\s+\\Z', '')
-                        | hash('sha256')) if (item.status | default(0) | int) == 200 else '')
+                        | from_yaml
+                        | to_nice_yaml(indent=2)
+                        | hash('sha256'))
+                       if (item.status | default(0) | int) == 200 else '')
              } }) }}
       loop: "{{ arquivos.results }}"
       loop_control:
         label: "{{ item.item.path_with_namespace }}"
+
+
+
+          #    - name: Calcular o hash do playbook de cada projeto
+          #      ansible.builtin.set_fact:
+          #        info: >-
+          #          {{ info | combine({ (item.item.id | string): {
+          #               'http': (item.status | default(0) | int),
+          #               'commit': (item.json.last_commit_id | default('')),
+          #               'sha': (((item.json.content | b64decode)
+          #                        | regex_replace('^\\ufeff', '')
+          #                        | regex_replace('\\r\\n?', '\\n')
+          #                        | regex_replace('[ \\t]+$', '', multiline=True)
+          #                        | regex_replace('\\s+\\Z', '')
+          #                        | hash('sha256')) if (item.status | default(0) | int) == 200 else '')
+          #             } }) }}
+          #      loop: "{{ arquivos.results }}"
+          #      loop_control:
+          #        label: "{{ item.item.path_with_namespace }}"
 
     - name: Separar os projetos idênticos ao legado
       ansible.builtin.set_fact:
