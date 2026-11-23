@@ -53,6 +53,48 @@
 #
 # ============================================================
 
+# TRAVA ANTI-TÍTULO AMBÍGUO: o cliente digita o título à mão e às vezes mistura
+# operações, ex.: "Atualização de Alerta de Certificado - Remoção de Alerta de
+# Certificado - Zabbix". Como o filtro abaixo é "contém", esse título casaria só
+# com a REMOÇÃO e a automação removeria o alerta em vez de atualizar.
+# Aqui, todo chamado cujo título cite MAIS DE UMA operação faz o playbook
+# FALHAR (antes de alterar qualquer coisa), listando os chamados para o analista
+# corrigir o título no Jira. A detecção é por palavra-chave, independente do
+# texto exato das variáveis jira_resumo_*, então pega qualquer mistura.
+# Para reconhecer mais sinônimos (ex.: 'exclu'), basta incluir na lista da operação.
+- name: Detectar chamados com título ambíguo (mais de uma operação)
+  ansible.builtin.set_fact:
+    chaves_ambiguas: >-
+      {%- set r = namespace(lista=[]) -%}
+      {%- for t in jira_search.json.issues -%}
+      {%- set s = t.fields.summary | default('') | lower | regex_replace('[\\W_]+', ' ') | trim -%}
+      {%- set n = namespace(ops=0) -%}
+      {%- for palavras in palavras_operacao.values() -%}
+      {%- if s | regex_search('\\b(' ~ (palavras | join('|')) ~ ')') -%}
+      {%- set n.ops = n.ops + 1 -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- if n.ops > 1 -%}
+      {%- set r.lista = r.lista + [t.key] -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ r.lista }}
+  vars:
+    palavras_operacao:
+      atualizacao: ['atualiza']
+      criacao: ['cria']
+      remocao: ['remo']
+
+- name: Falhar se houver chamado com título ambíguo
+  ansible.builtin.fail:
+    msg: >-
+      Playbook interrompido: título com mais de uma operação (atualização/criação/remoção).
+      Corrija o título no Jira e execute novamente. Chamados:
+      {% for t in jira_search.json.issues if t.key in chaves_ambiguas %}
+      {{ t.key }} ("{{ t.fields.summary }}");
+      {% endfor %}
+  when: chaves_ambiguas | length > 0
+
 # CORREÇÃO: antes o filtro comparava com 'Atualização de alerta',
 # texto diferente do resumo usado na JQL. Agora o filtro usa as mesmas
 # variáveis da JQL. A comparação é tolerante a detalhes que não mudam o
