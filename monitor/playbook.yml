@@ -1,99 +1,279 @@
----
-- name: Atualiza e cria alertas de certificado no Zabbix baseado em chamados de GA
-  hosts: localhost
-  gather_facts: true
-  environment:
-    TZ: "America/Sao_Paulo"
+# ============================================================
+# 1. Buscar chamados candidatos
+#
+# A JQL usa "~" (busca de texto, aproximada). Por isso ela só
+# traz candidatos; o filtro exato por summary é feito no passo 2.
+# Os dois resumos vêm do playbook (jira_resumo_atualizacao e
+# jira_resumo_criacao), para JQL e filtro local nunca divergirem.
+# ============================================================
 
+- name: Buscar chamados de atualização, criação e remoção de alerta
+  ansible.builtin.uri:
+    url: "{{ jira_base_url }}/rest/api/3/search/jql"
+    method: POST
+    force_basic_auth: true
+    user: "{{ jira_user }}"
+    password: "{{ jira_password }}"
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+    body_format: json
+    body:
+      jql: >-
+        {% if jira_chamado | length > 0 %} key = {{ jira_chamado }} {% else %} project = {{ projeto_jira }} AND (
+          summary ~ "\"{{ jira_resumo_atualizacao }}\""
+          OR summary ~ "\"{{ jira_resumo_criacao }}\""
+          OR summary ~ "\"{{ jira_resumo_remocao }}\""
+        ) AND statusCategory != Done {% endif %}
+      maxResults: 1000
+      fields:
+      - summary
+      - description
+      - customfield_10238
+    status_code: 200
+  register: jira_search
+  environment: "{{ proxy_env }}"
+
+# ============================================================
+# 2. Manter somente chamados válidos. O resumo (summary) do chamado
+#    precisa CONTER o texto de jira_resumo_atualizacao ou de
+#    jira_resumo_criacao (comparação tolerante, explicada abaixo). Isso decide se o chamado é de
+#    atualização ou de criação.
+# ============================================================
+
+# ============================================================
+# FUTURAMENTE REATIVAR:
+#
+# | selectattr('fields.customfield_10238', 'defined')
+# | selectattr(
+#     'fields.customfield_10238.name',
+#     'equalto',
+#     'CLBR-TI-OPS-IT_SERVICE_MONITORING'
+#   )
+#
+# ============================================================
+
+# TRAVA ANTI-TÍTULO AMBÍGUO: o cliente digita o título à mão e às vezes mistura
+# operações, ex.: "Atualização de Alerta de Certificado - Remoção de Alerta de
+# Certificado - Zabbix". Como o filtro abaixo é "contém", esse título casaria só
+# com a REMOÇÃO e a automação removeria o alerta em vez de atualizar.
+# Aqui, todo chamado cujo título cite MAIS DE UMA operação faz o playbook
+# FALHAR (antes de alterar qualquer coisa), listando os chamados para o analista
+# corrigir o título no Jira. A detecção é por palavra-chave, independente do
+# texto exato das variáveis jira_resumo_*, então pega qualquer mistura.
+# Para reconhecer mais sinônimos (ex.: 'exclu'), basta incluir na lista da operação.
+- name: Detectar chamados com título ambíguo (mais de uma operação)
+  ansible.builtin.set_fact:
+    chaves_ambiguas: >-
+      {%- set r = namespace(lista=[]) -%}
+      {%- for t in jira_search.json.issues -%}
+      {%- set s = t.fields.summary | default('') | lower | regex_replace('[\\W_]+', ' ') | trim -%}
+      {%- set n = namespace(ops=0) -%}
+      {%- for palavras in palavras_operacao.values() -%}
+      {%- if s | regex_search('\\b(' ~ (palavras | join('|')) ~ ')') -%}
+      {%- set n.ops = n.ops + 1 -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {%- if n.ops > 1 -%}
+      {%- set r.lista = r.lista + [t.key] -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ r.lista }}
   vars:
-    # ----------------------------------------------------------
-    # Resumos (summary) que diferenciam os dois tipos de chamado.
-    # Usados na JQL e no filtro local da role descoberta.
-    # ----------------------------------------------------------
-    jira_resumo_atualizacao: "Atualização de Alerta de Certificado - Zabbix"
-    jira_resumo_remocao: "Remoção de Alerta de Certificado - Zabbix"
-    jira_resumo_criacao: "Criação de Alerta de Certificado - Zabbix"
+    palavras_operacao:
+      atualizacao: ['atualiza']
+      criacao: ['cria']
+      remocao: ['remo']
 
+- name: Falhar se houver chamado com título ambíguo
+  ansible.builtin.fail:
+    msg: >-
+      Playbook interrompido: título com mais de uma operação (atualização/criação/remoção).
+      Corrija o título no Jira e execute novamente. Chamados:
+      {% for t in jira_search.json.issues if t.key in chaves_ambiguas %}
+      {{ t.key }} ("{{ t.fields.summary }}");
+      {% endfor %}
+  when: chaves_ambiguas | length > 0
 
-    # ----------------------------------------------------------
-    # Zabbix: host e padrão de chave dos itens de certificado.
-    # Chave: zbx_valida_data_certificado["host","Tipo","DD/MM/AAAA"]
-    #
-    # zabbix_chave_regex  -> extrai (host, tipo, data) de uma chave.
-    # zabbix_data_regex   -> localiza somente a data dentro da chave.
-    # (regex em aspas simples do YAML: a barra invertida é literal)
-    # ----------------------------------------------------------
-    zabbix_host_certificados: "CERTIFICADOS_CLARO_BRASIL"
-    zabbix_chave_certificado: "zbx_valida_data_certificado"
-    zabbix_chave_regex: '^zbx_valida_data_certificado\[\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,\s*"([0-9]{2}/[0-9]{2}/[0-9]{4})"\s*\]$'
-    zabbix_data_regex: '[0-9]{2}/[0-9]{2}/[0-9]{4}(?="\s*\]$)'
+# CORREÇÃO: antes o filtro comparava com 'Atualização de alerta',
+# texto diferente do resumo usado na JQL. Agora o filtro usa as mesmas
+# variáveis da JQL. A comparação é tolerante a detalhes que não mudam o
+# sentido: maiúsculas/minúsculas, espaços repetidos ou "não separáveis" e
+# tipo de hífen/pontuação ("-", "–", "—"). Os dois textos são normalizados
+# (minúsculas, tudo que não é letra/número vira um único espaço) e o resumo
+# do chamado precisa conter o texto da variável. "Atualização de alerta"
+# (resumo antigo, sem "de Certificado - Zabbix") NÃO casa.
+- name: Selecionar tickets de atualização, criação e remoção de alerta
+  ansible.builtin.set_fact:
+    tickets_atualizacao: >-
+      {%- set alvo = jira_resumo_atualizacao | lower | regex_replace('[\\W_]+', ' ') | trim -%} {%- set r = namespace(lista=[]) -%} {%- for t in jira_search.json.issues -%} {%- if alvo in (t.fields.summary | default('') | lower | regex_replace('[\\W_]+', ' ') | trim) -%} {%- set r.lista = r.lista + [t] -%} {%- endif -%} {%- endfor -%} {{ r.lista }}
 
-    # URL da API (antes montada com set_fact dentro das roles).
-    zabbix_api_url: >-
-      {{ 'https' if zabbix_use_ssl | bool else 'http' }}://{{ zabbix_host }}{{ (':' ~ zabbix_port) if zabbix_port | int not in [80, 443] else '' }}{{ ('/' ~ zabbix_url_path) if zabbix_url_path | length > 0 else '' }}/api_jsonrpc.php
+    tickets_criacao: >-
+      {%- set alvo = jira_resumo_criacao | lower | regex_replace('[\\W_]+', ' ') | trim -%} {%- set r = namespace(lista=[]) -%} {%- for t in jira_search.json.issues -%} {%- if alvo in (t.fields.summary | default('') | lower | regex_replace('[\\W_]+', ' ') | trim) -%} {%- set r.lista = r.lista + [t] -%} {%- endif -%} {%- endfor -%} {{ r.lista }}
 
-    # ----------------------------------------------------------
-    # Segurança: por padrão NADA é gravado no Zabbix (simulação).
-    # Para gravar de verdade, informe aplicar_alteracoes: true
-    # (Survey do AAP ou extra vars).
-    # ----------------------------------------------------------
-    zabbix_aplicar_alteracoes: "{{ aplicar_alteracoes | default(false) | bool }}"
+    tickets_remocao: >-
+      {%- set alvo = jira_resumo_remocao | lower | regex_replace('[\\W_]+', ' ') | trim -%} {%- set r = namespace(lista=[]) -%} {%- for t in jira_search.json.issues -%} {%- if alvo in (t.fields.summary | default('') | lower | regex_replace('[\\W_]+', ' ') | trim) -%} {%- set r.lista = r.lista + [t] -%} {%- endif -%} {%- endfor -%} {{ r.lista }}
 
-    # ----------------------------------------------------------
-    # Survey (opcional): número do chamado, ex.: PDST-123456.
-    # Em branco -> busca todos os chamados em aberto (comportamento
-    # de sempre). Preenchido -> processa SOMENTE esse chamado.
-    # ----------------------------------------------------------
-    jira_chamado: "{{ chamado | default('') | string | trim | upper }}"
+- name: Juntar os tickets selecionados
+  ansible.builtin.set_fact:
+    tickets_certificados: "{{ tickets_atualizacao + tickets_criacao + tickets_remocao }}"
 
-  pre_tasks:
-    # Falha antes de qualquer alteração no Zabbix, para não alterar
-    # nada e só então descobrir que o relatório não tem destinatário.
-    - name: Validar o destinatário do relatório (variável email da Survey)
-      ansible.builtin.assert:
-        that:
-          - email is defined
-          - email | string | trim | length > 0
-          - "'@' in (email | string)"
-        fail_msg: >-
-          Informe a variável "email" na Survey do AAP com o endereço que
-          receberá o relatório (ex.: usuario@empresa.com).
-        quiet: true
+# A JQL aproximada pode trazer chamados parecidos; avisa quais foram ignorados.
+- name: Avisar sobre chamados retornados pela busca e ignorados
+  ansible.builtin.debug:
+    msg: "Ignorado (resumo diferente dos esperados): {{ item.key }} - {{ item.fields.summary }}"
+  loop: >-
+    {{
+      jira_search.json.issues
+      | rejectattr('key', 'in', tickets_certificados | map(attribute='key') | list)
+      | list
+    }}
+  loop_control:
+    label: "{{ item.key }}"
 
-    # Formato do chamado (evita montar uma JQL inválida ou com texto estranho).
-    - name: Validar o número do chamado (variável chamado da Survey, opcional)
-      ansible.builtin.assert:
-        that:
-          - jira_chamado | length == 0 or jira_chamado is match('^[A-Z][A-Z0-9_]*-[0-9]+$')
-        fail_msg: >-
-          O chamado informado ("{{ jira_chamado }}") não tem o formato esperado.
-          Use algo como PDST-123456, ou deixe em branco para buscar todos.
-        quiet: true
+# Se a Survey informou o chamado e ele não foi aproveitado, diz o motivo provável.
+- name: Avisar quando o chamado informado na Survey não foi aproveitado
+  ansible.builtin.debug:
+    msg: >-
+      O chamado {{ jira_chamado }} não foi encontrado ou o resumo dele não contém "{{ jira_resumo_atualizacao }}", "{{ jira_resumo_criacao }}" ou "{{ jira_resumo_remocao }}".
+  when:
+  - jira_chamado | length > 0
+  - tickets_certificados | length == 0
 
+# ============================================================
+# 3. Mostrar resultado
+# ============================================================
 
-  roles:
-    # Cria o host virtual usado pelas tasks do Zabbix
-    - role: inventory
+- name: Mostrar chamados encontrados
+  ansible.builtin.debug:
+    msg:
+      ticket: "{{ item.key }}"
+      resumo: "{{ item.fields.summary }}"
+      blocos_adf: "{{ item.fields.description.content | default([]) | length }}"
+  loop: "{{ tickets_certificados }}"
+  loop_control:
+    label: "{{ item.key }}"
 
-    # Procura os chamados no Jira e separa em:
-    #   certificados_para_atualizar / certificados_para_criar
-    - role: descoberta
+# - name: Mostrar somente tipo dos blocos
+#   debug:
+#     msg:
+#       tipo: "{{ bloco.type }}"
+#       texto: "{{ bloco.content[0].text | default('') }}"
+#   loop: "{{ tickets_certificados[0].fields.description.content }}"
+#   loop_control:
+#     loop_var: bloco
 
-    # Altera a validade (chave) de itens já cadastrados
-    - role: atualiza
-      when: certificados_para_atualizar | length > 0
+# ============================================================
+# 4. Extrair certificados da descrição (ADF)
+#
+# 4a. Esquema "tipo + data + hosts em lista com marcadores": extração
+#     ADF preservada. Vale para chamados de atualização e também para
+#     criação, caso o corpo siga o mesmo esquema. Cada certificado
+#     carrega 'ticket' e 'operacao' (conforme o summary do chamado).
+#     Resultado em certificados_jira.
+# 4b. Esquema "Rótulo: valor" (chamados de criação): extração própria,
+#     logo abaixo, que lê parágrafos e também itens de lista.
+#     Resultado em certificados_criacao_jira.
+# Um mesmo chamado só gera certificados por um dos esquemas.
+# ============================================================
 
-    # Remove certificados
-    - role: remove
-      when: certificados_para_remover | length > 0
-      
-    # Cadastra itens novos
-    - role: cria
-      when: certificados_para_criar | length > 0
+- name: Inicializar lista de certificados
+  ansible.builtin.set_fact:
+    certificados_jira: []
 
+- name: Extrair hosts e validades das descrições do Jira
+  ansible.builtin.set_fact:
+    certificados_jira: >-
+      {% set resultado = namespace(certificados=[]) %} {% for ticket in tickets_certificados | default([]) %} {% set estado = namespace(validade='', tipo='') %} {% set operacao = 'CRIACAO' if ticket.key in (tickets_criacao | map(attribute='key') | list) else 'REMOCAO' if ticket.key in (tickets_remocao | map(attribute='key') | list) else 'ATUALIZACAO' %} {% for bloco in ticket.fields.description.content | default([]) %} {% if bloco.type == 'paragraph' %} {% set texto = bloco.content | default([])
+         | selectattr('type', 'equalto', 'text')
+         | map(attribute='text')
+         | join('')
+         | trim %}
+      {% if texto | upper == 'EXTERNO' %} {% set estado.tipo = 'Externo' %} {% elif texto | upper in ['INTERNO', 'INTERNOS'] %} {% set estado.tipo = 'Interno' %} {% elif texto is match('^[0-9]{2}/[0-9]{2}/[0-9]{4}$') %} {% set estado.validade = texto %} {% endif %} {% elif bloco.type == 'bulletList' %} {% for item in bloco.content | default([]) %} {% for paragrafo in item.content | default([]) %} {% if paragrafo.type == 'paragraph' %} {% set host = (
+        paragrafo.content | default([])
+        | selectattr('type', 'equalto', 'text')
+        | map(attribute='text')
+        | join('')
+        | trim
+        | regex_replace('^\\*\\.', 'star.')
+      ) %} {% if host and (estado.validade or operacao == 'REMOCAO') %} {% set resultado.certificados = resultado.certificados + [
+        {
+          'ticket': ticket.key,
+          'operacao': operacao,
+          'host': host,
+          'tipo': estado.tipo,
+          'validade': '' if operacao == 'REMOCAO' else estado.validade
+        }
+      ] %} {% endif %} {% endif %} {% endfor %} {% endfor %} {% endif %} {% endfor %} {% endfor %} {{ resultado.certificados | to_yaml | from_yaml }}
 
+- name: Converter texto para lista
+  ansible.builtin.set_fact:
+    certificados_jira: "{{ certificados_jira | from_yaml }}"
 
-    # Gera e envia o relatório HTML usando templates/corpo_email.html.j2
-    # e exibe os certificados processados no output final do job.
-    - role: relatorios
-      # tasks_from: certificados
+# ------------------------------------------------------------
+# 4b. Chamados de CRIAÇÃO. O corpo vem assim:
+#
+#   Nome completo do certificado: clarocustodioa.claro.com.br
+#   Tipo de certificado: Interno
+#   Data de renovação: 06/10/2027
+#
+# Um chamado pode ter VÁRIOS blocos desse tipo (um certificado por
+# bloco). Cada linha "Nome ...:" abre um novo certificado; o "Tipo de
+# certificado" e a "Data de renovação" seguintes pertencem a ele. O bloco
+# fecha quando começa o próximo "Nome" ou a descrição termina.
+#
+# As linhas podem chegar como parágrafos separados (Formato A) ou como um
+# único parágrafo com quebras de linha (hardBreak no ADF, Formato B, que
+# vem precedido de um parágrafo "Certificado Novo" e com o rótulo
+# "Nome dos certificados:"). Os dois são tratados. O rótulo de host é
+# qualquer um que comece com "Nome"; os demais rótulos são reconhecidos
+# pelo começo (não dependem de acento). "*." no início do host vira
+# "star.", igual à atualização. Bloco sem host ou sem data válida não gera
+# certificado (e o chamado sem nenhum certificado é avisado na task seguinte).
+# ------------------------------------------------------------
+- name: Extrair certificado dos chamados de criação
+  ansible.builtin.set_fact:
+    certificados_criacao_jira: >-
+      {%- set resultado = namespace(certificados=[]) -%} {%- for ticket in tickets_certificados | default([]) -%} {%- set cert = namespace(host='', tipo='', validade='') -%} {%- set op = 'CRIACAO' if ticket.key in (tickets_criacao | map(attribute='key') | list) else 'REMOCAO' if ticket.key in (tickets_remocao | map(attribute='key') | list) else 'ATUALIZACAO' -%} {%- set pars = namespace(lista=[]) -%} {%- for bloco in ticket.fields.description.content | default([]) -%} {%- if bloco.type == 'paragraph' -%} {%- set pars.lista = pars.lista + [bloco] -%} {%- elif bloco.type in ['bulletList', 'orderedList'] -%} {%- for li in bloco.content | default([]) -%} {%- for pg in li.content | default([]) if pg.type == 'paragraph' -%} {%- set pars.lista = pars.lista + [pg] -%} {%- endfor -%} {%- endfor -%} {%- endif -%} {%- endfor -%} {%- set pares = namespace(lista=[]) -%} {%- for bloco in pars.lista -%} {%- set t = namespace(texto='') -%} {%- for no in bloco.content | default([]) -%} {%- if no.type == 'text' -%} {%- set t.texto = t.texto ~ no.text -%} {%- elif no.type == 'hardBreak' -%} {%- set t.texto = t.texto ~ '\n' -%} {%- endif -%} {%- endfor -%} {%- for linha in t.texto.split('\n') if ':' in linha -%} {%- set pares.lista = pares.lista + [{'rotulo': linha.split(':', 1)[0] | trim | lower, 'valor': linha.split(':', 1)[1] | trim}] -%} {%- endfor -%} {%- endfor -%} {#- par final "nome" vazio: força o fechamento do último bloco -#} {%- set pares.lista = pares.lista + [{'rotulo': 'nome', 'valor': ''}] -%} {%- for par in pares.lista -%} {%- if par.rotulo.startswith('nome') -%} {%- if cert.host -%} {%- if cert.validade or op == 'REMOCAO' -%} {%- set resultado.certificados = resultado.certificados + [{'ticket': ticket.key, 'operacao': op, 'host': cert.host | regex_replace('^\\*\\.', 'star.'), 'tipo': cert.tipo, 'validade': '' if op == 'REMOCAO' else cert.validade}] -%} {%- endif -%} {%- set cert.tipo = '' -%} {%- set cert.validade = '' -%} {%- endif -%} {%- set cert.host = par.valor -%} {%- elif par.rotulo.startswith('tipo de certificado') -%} {%- set cert.tipo = 'Externo' if par.valor | upper == 'EXTERNO' else 'Interno' if par.valor | upper in ['INTERNO', 'INTERNOS'] else '' -%} {%- elif par.rotulo.startswith('data de renova') and par.valor is match('^[0-9]{2}/[0-9]{2}/[0-9]{4}$') -%} {%- set cert.validade = par.valor -%} {%- endif -%} {%- endfor -%} {%- endfor -%} {{ resultado.certificados }}
+
+- name: Avisar sobre chamados de criação/remoção sem certificado reconhecido
+  ansible.builtin.debug:
+    msg: >-
+      Chamado {{ item.key }} ignorado: não foi possível ler {{ 'o host e o tipo' if item.key in (tickets_remocao | map(attribute='key') | list) else 'host e data de renovação válidos' }} da descrição.
+  loop: >-
+    {{
+      (tickets_criacao + tickets_remocao)
+      | rejectattr('key', 'in', (certificados_jira + certificados_criacao_jira) | map(attribute='ticket') | list)
+      | list
+    }}
+  loop_control:
+    label: "{{ item.key }}"
+
+# ============================================================
+# 5. Separar atualização x criação (nunca se misturam).
+#    certificados_para_atualizar mantém o nome original.
+#    'unique' remove linhas idênticas repetidas no mesmo chamado.
+# ============================================================
+
+# - name: Separar certificados de atualização e de criação
+#   ansible.builtin.set_fact:
+#     certificados_para_atualizar: "{{ certificados_jira | selectattr('operacao', 'equalto', 'ATUALIZACAO') | unique | list }}"
+#     certificados_para_criar: "{{ (certificados_jira | selectattr('operacao', 'equalto', 'CRIACAO') | list + certificados_criacao_jira) | unique | list }}"
+
+- name: Separar certificados por operação
+  ansible.builtin.set_fact:
+    certificados_para_atualizar: "{{ (certificados_jira + certificados_criacao_jira) | selectattr('operacao', 'equalto', 'ATUALIZACAO') | unique | list }}"
+    certificados_para_criar: "{{ (certificados_jira + certificados_criacao_jira) | selectattr('operacao', 'equalto', 'CRIACAO') | unique | list }}"
+    certificados_para_remover: "{{ (certificados_jira + certificados_criacao_jira) | selectattr('operacao', 'equalto', 'REMOCAO') | unique | list }}"
+
+# - name: Exibir certificados encontrados
+#   ansible.builtin.debug:
+#     msg:
+#       operacao: "{{ item.operacao }}"
+#       ticket: "{{ item.ticket }}"
+#       host: "{{ item.host }}"
+#       tipo: "{{ item.tipo }}"
+#       validade: "{{ item.validade }}"
+#   loop: "{{ certificados_para_atualizar + certificados_para_criar }}"
+#   loop_control:
+#     label: "{{ item.operacao }} {{ item.host }}"
