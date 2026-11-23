@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# matar_job.sh - cancela/mata um job travado do AAP (rodar NO CONTROLLER)
+#
+# Uso:
+#   ./matar_job.sh <JOB_ID>            # info + cancel normal + oferece matar no exec node
+#   ./matar_job.sh <JOB_ID> --force    # no final, se ainda running, forca status=failed no banco
+#
+# Variaveis opcionais:
+#   RECEPTOR_SOCK=/var/run/awx-receptor/receptor.sock
+#   SSH_USER=seu_usuario   (usuario para ssh no exec node)
+
+set -u
+
+JOB_ID="${1:-}"
+FORCE="${2:-}"
+RECEPTOR_SOCK="${RECEPTOR_SOCK:-/var/run/awx-receptor/receptor.sock}"
+SSH_USER="${SSH_USER:-$USER}"
+
+if ! [[ "$JOB_ID" =~ ^[0-9]+$ ]]; then
+  echo "Uso: $0 <JOB_ID_NUMERICO> [--force]"
+  exit 1
+fi
+
+# --- descobrir como chamar o awx-manage -----------------------------------
+if command -v awx-manage >/dev/null 2>&1; then
+  AWXMANAGE=(sudo awx-manage)
+elif command -v podman >/dev/null 2>&1 && podman ps --format '{{.Names}}' | grep -q '^automation-controller-task$'; then
+  AWXMANAGE=(podman exec -i automation-controller-task awx-manage)
+else
+  echo "ERRO: awx-manage nao encontrado (nem container automation-controller-task)."
+  echo "Rode este script no controller."
+  exit 1
+fi
+
+run_py() {
+  # le codigo python do stdin e executa no shell do awx
+  "${AWXMANAGE[@]}" shell_plus --plain 2>/dev/null
+}
+
+info_job() {
+  run_py <<EOF | grep '^JOB_'
+j = UnifiedJob.objects.get(pk=${JOB_ID})
+print("JOB_STATUS=%s" % j.status)
+print("JOB_NAME=%s" % j.name)
+print("JOB_CANCEL_FLAG=%s" % j.cancel_flag)
+print("JOB_EXEC_NODE=%s" % j.execution_node)
+print("JOB_CONTROLLER_NODE=%s" % j.controller_node)
+print("JOB_WORK_UNIT=%s" % j.work_unit_id)
+EOF
+}
+
+get_val() { echo "$INFO" | grep "^$1=" | cut -d= -f2-; }
+
+echo "=== [1/4] Informacoes do job ${JOB_ID} ==="
+INFO="$(info_job)"
+if [ -z "$INFO" ]; then
+  echo "ERRO: nao consegui ler o job ${JOB_ID} (job nao existe ou awx-manage falhou)."
+  exit 1
+fi
+echo "$INFO" | sed 's/^JOB_/  /'
+
+STATUS="$(get_val JOB_STATUS)"
+EXEC_NODE="$(get_val JOB_EXEC_NODE)"
+WORK_UNIT="$(get_val JOB_WORK_UNIT)"
+
+case "$STATUS" in
+  successful|failed|error|canceled)
+    echo "Job ja finalizado (status=${STATUS}). Nada a fazer."
+    exit 0 ;;
+esac
+
+echo
+echo "=== [2/4] Cancelamento normal (j.cancel()) ==="
+run_py <<EOF | grep '^JOB_'
+j = UnifiedJob.objects.get(pk=${JOB_ID})
+r = j.cancel(job_explanation="Cancelado manualmente via matar_job.sh")
+print("JOB_CANCEL_RESULT=%s" % r)
+EOF
+echo "Aguardando 20s..."
+sleep 20
+INFO="$(info_job)"
+STATUS="$(get_val JOB_STATUS)"
+echo "  status atual: ${STATUS}"
+case "$STATUS" in
+  successful|failed|error|canceled)
+    echo "OK: job finalizado."
+    exit 0 ;;
+esac
+
+echo
+echo "=== [3/4] Matar no exec node: ${EXEC_NODE} (work unit: ${WORK_UNIT}) ==="
+CMD_REMOTE=$(cat <<EOF
+echo '--- receptor work list (filtrado) ---'
+sudo receptorctl --socket ${RECEPTOR_SOCK} work list 2>&1 | grep -B1 -A6 '${WORK_UNIT}'
+echo '--- cancel/release work unit ---'
+sudo receptorctl --socket ${RECEPTOR_SOCK} work cancel '${WORK_UNIT}' 2>&1
+sudo receptorctl --socket ${RECEPTOR_SOCK} work release '${WORK_UNIT}' 2>&1
+echo '--- containers do job ---'
+sudo -u awx podman ps --format '{{.ID}} {{.Names}}' | grep -E '(_|-)${JOB_ID}(_|-|\$| )'
+for c in \$(sudo -u awx podman ps --format '{{.ID}} {{.Names}}' | grep -E '(_|-)${JOB_ID}(_|-|\$| )' | awk '{print \$1}'); do
+  echo "podman kill \$c"
+  sudo -u awx podman kill "\$c"
+done
+EOF
+)
+
+echo "Comandos que serao executados em ${EXEC_NODE} via ssh:"
+echo "------------------------------------------------------"
+echo "$CMD_REMOTE"
+echo "------------------------------------------------------"
+read -r -p "Executar via ssh (${SSH_USER}@${EXEC_NODE})? [s/N] " ANS
+if [[ "$ANS" =~ ^[sSyY]$ ]]; then
+  ssh -t "${SSH_USER}@${EXEC_NODE}" "$CMD_REMOTE"
+  echo "Aguardando 15s..."
+  sleep 15
+  INFO="$(info_job)"
+  STATUS="$(get_val JOB_STATUS)"
+  echo "  status atual: ${STATUS}"
+else
+  echo "Pulado. Rode os comandos acima manualmente no ${EXEC_NODE}."
+fi
+
+case "$STATUS" in
+  successful|failed|error|canceled)
+    echo "OK: job finalizado."
+    exit 0 ;;
+esac
+
+echo
+echo "=== [4/4] Forcar status no banco ==="
+if [ "$FORCE" = "--force" ]; then
+  run_py <<EOF | grep '^JOB_'
+j = UnifiedJob.objects.get(pk=${JOB_ID})
+j.cancel_flag = True
+j.status = 'failed'
+j.job_explanation = 'Forcado manualmente via matar_job.sh'
+j.save()
+print("JOB_FORCADO=ok")
+EOF
+  INFO="$(info_job)"
+  echo "  status final: $(get_val JOB_STATUS)"
+else
+  echo "Job ainda em '${STATUS}'. Garanta que o processo morreu no no e rode de novo:"
+  echo "  $0 ${JOB_ID} --force"
+fi
