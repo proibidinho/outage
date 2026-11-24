@@ -1,0 +1,49 @@
+    # Sem Satellite: os RPMs ficam em logstash_rpm_dir (ex.: /root) e sao instalados juntos, sem consultar repositorios (disablerepo).
+    - name: Procurar os RPMs enviados para a VM
+      ansible.builtin.find:
+        paths: "{{ logstash_rpm_dir }}"
+        patterns: "*.rpm"
+      register: rpms_locais
+
+    - name: Instalar os RPMs locais (dnf resolve as dependencias entre eles; nao usa o Satellite)
+      ansible.builtin.dnf:
+        name: "{{ rpms_locais.files | map(attribute='path') | list }}"
+        state: present
+        disablerepo: "*"
+      when: rpms_locais.matched | int > 0
+
+    - name: Ler pacotes instalados
+      ansible.builtin.package_facts:
+        manager: rpm
+
+    - name: Parar se faltar algum pacote base
+      vars:
+        faltam: "{{ ['lvm2', 'xfsprogs', 'chrony', 'openssl', 'python3-dnf-plugin-versionlock'] | difference(ansible_facts.packages.keys() | list) }}"
+      ansible.builtin.assert:
+        that: faltam | length == 0
+        fail_msg: "{{ inventory_hostname }}: faltam os pacotes {{ faltam }}. Envie os RPMs (e as dependencias) para {{ logstash_rpm_dir }}."
+        quiet: true
+
+
+    - name: "Instalar o Logstash na versao fixada"
+      ansible.builtin.dnf:
+        name: "logstash-{{ logstash_version }}"
+        enablerepo: elasticsearch
+        disablerepo: "*"              # so o repositorio da Elastic (pelo proxy); o Satellite fica de fora
+        state: present
+        disable_gpg_check: false
+      environment: "{{ proxy_env }}"
+
+      ansible.builtin.shell: |
+        if dnf -q --disablerepo='*' versionlock list 2>/dev/null | grep -q "^logstash-.*{{ logstash_version }}"; then
+          echo JA_EXISTIA
+        else
+          dnf -q --disablerepo='*' versionlock add logstash-{{ logstash_version }} && echo ADICIONADO
+        fi
+
+logstash_rpm_dir: /root                           # VMs sem Satellite: RPMs do SO (lvm2, xfsprogs, chrony, openssl, versionlock e dependencias) enviados para esta pasta
+
+
+
+
+
