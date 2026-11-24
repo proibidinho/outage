@@ -42,3 +42,28 @@ all:
           hosts:
             cbl2am26284: {ansible_host: 10.29.88.216}
             cbl2am57168: {ansible_host: 10.29.88.217}
+
+
+
+#Inventrio logstash
+all:
+  children:
+
+    campinas:
+      hosts:
+        CBC2AM37073:
+        CBC2AM23693:
+
+    lapa:
+      hosts:
+        CBL2AM68703:
+        CBL2AM65623:
+        CBL2AM64241:
+        CBL2AM24836:
+        CBL2BM25341:
+
+    mackenzie:
+      hosts:
+        CBM2AM74841:
+        CBM2AM79112:
+
