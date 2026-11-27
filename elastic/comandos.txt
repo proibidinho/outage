@@ -33,3 +33,29 @@ systemctl is-active bf-observability
 curl --noproxy '*' -s http://127.0.0.1:8765/api/health; echo
 curl --noproxy '*' -s http://127.0.0.1:8765/api/sources/status | python3 -m json.tool
 FIM
+
+
+
+
+
+
+
+
+
+
+
+
+#Se der erro
+bash <<'FIM'
+set -euo pipefail
+BK=$(ls -t /root/bf-observability-antes-1.0.8-*.tar.gz | head -1)
+echo "Restaurando $BK"
+systemctl stop bf-observability
+mv /opt/bf-observability /opt/bf-observability.falha-$(date +%H%M%S)
+tar -xzpf "$BK" -C /opt
+restorecon -R /opt/bf-observability
+systemctl start bf-observability
+sleep 10
+curl --noproxy '*' -s http://127.0.0.1:8765/api/health; echo
+FIM
+
