@@ -1,0 +1,35 @@
+bash <<'FIM'
+set -euo pipefail
+PKG=/tmp/bf-observability-1.0.8.tar.gz
+APP=/opt/bf-observability
+BK=/root/bf-observability-antes-1.0.8-$(date +%Y%m%d-%H%M%S).tar.gz
+
+if grep -q '^VERSION = "1.0.8"' "$APP/app/main.py"; then echo "Ja esta na 1.0.8, nada a fazer."; exit 0; fi
+
+echo "== 1/5 Conferindo o pacote"
+echo "a30a1832524b86612d90985b2dac1a2654c99d0915dc3f14dbfdf80b42b31ce0  $PKG" | sha256sum -c
+
+echo "== 2/5 Parando o servico e fazendo backup"
+trap 'echo "[ERRO] Parou aqui. Tentando religar o servico."; systemctl start bf-observability' ERR
+systemctl stop bf-observability
+(umask 077; tar -czf "$BK" -C /opt bf-observability)
+ls -lh "$BK"
+
+echo "== 3/5 Aplicando a 1.0.8"
+tar -xzf "$PKG" -C "$APP" --no-same-owner
+grep '^VERSION' "$APP/app/main.py"
+
+echo "== 4/5 Subindo o servico (aguarde 60 s)"
+UNIT=$(systemctl show -p FragmentPath --value bf-observability)
+grep -q '^\[Install\]' "$UNIT" || printf '\n[Install]\nWantedBy=multi-user.target\n' >> "$UNIT"
+systemctl daemon-reload
+systemctl enable bf-observability
+systemctl start bf-observability
+sleep 60
+
+echo "== 5/5 Conferindo"
+trap - ERR
+systemctl is-active bf-observability
+curl --noproxy '*' -s http://127.0.0.1:8765/api/health; echo
+curl --noproxy '*' -s http://127.0.0.1:8765/api/sources/status | python3 -m json.tool
+FIM
