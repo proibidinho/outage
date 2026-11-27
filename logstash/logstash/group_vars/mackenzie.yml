@@ -1,0 +1,4 @@
+---
+# Datacenter Mackenzie (2 Logstash)
+logstash_proxy: "http://10.243.179.231:3128"
+# logstash_rpm_local: true      # descomente para forcar o RPM local (se o proxy bloquear artifacts.elastic.co). Em "auto" ele ja usa o RPM de /root quando o proxy falha

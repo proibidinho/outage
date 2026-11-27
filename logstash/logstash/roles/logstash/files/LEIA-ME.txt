@@ -1,0 +1,3 @@
+Coloque aqui o arquivo http_ca.crt: a cadeia (PEM) da CA da EMPRESA que assinou o certificado do VIP do Elasticsearch no F5.
+Teste antes: curl --noproxy "*" --cacert http_ca.crt https://<elastic_vip>/   (401 = cadeia correta)
+Nunca coloque chaves privadas (.key) ou arquivos .p12 neste projeto.

@@ -1,0 +1,19 @@
+# PIPELINE DE TESTE de comunicacao (Ansible: acao=pipeline_teste). Remova com acao=pipeline_teste_remover.
+# Gera 1 evento por minuto e grava no cluster. Nao le nada de fora.
+input {
+  heartbeat {
+    interval => 60
+    message => "teste de comunicacao {{ inventory_hostname }}"
+  }
+}
+output {
+  elasticsearch {
+    hosts => {{ logstash_es_hosts | to_json }}
+    ssl_enabled => true
+    ssl_certificate_authorities => ["/etc/logstash/certs/http_ca.crt"]
+    user => "${ES_USER}"
+    password => "${ES_PWD}"
+    data_stream => "false"
+    index => "logstash-teste-comunicacao"
+  }
+}

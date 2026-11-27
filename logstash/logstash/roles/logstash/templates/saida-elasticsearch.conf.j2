@@ -1,0 +1,12 @@
+# EXEMPLO (nao e carregado: fica fora de conf.d). Copie o bloco output para o seu pipeline em /etc/logstash/conf.d/.
+# ES_USER e ES_PWD vem de /etc/sysconfig/logstash (variaveis de ambiente do servico).
+output {
+  elasticsearch {
+    hosts => {{ logstash_es_hosts | to_json }}
+    ssl_enabled => true
+    ssl_certificate_authorities => ["/etc/logstash/certs/http_ca.crt"]
+    user => "${ES_USER}"
+    password => "${ES_PWD}"
+    # indices/data streams: definir quando as fontes de dados forem conhecidas
+  }
+}

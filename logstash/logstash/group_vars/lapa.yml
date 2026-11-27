@@ -1,0 +1,3 @@
+---
+# Datacenter Lapa (4 Logstash)
+logstash_proxy: "http://10.29.177.37:8080"

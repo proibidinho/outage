@@ -1,0 +1,7 @@
+---
+# Reinicia o Logstash SOMENTE se alguma tarefa avisou (notify: reiniciar logstash) e ja existe pipeline (sem pipeline o servico fica parado).
+- name: reiniciar logstash
+  ansible.builtin.systemd_service:
+    name: logstash
+    state: restarted
+  when: logstash_tem_pipeline | default(false) | bool

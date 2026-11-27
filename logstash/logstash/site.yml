@@ -1,0 +1,79 @@
+---
+# UM unico playbook para as 8 VMs Logstash: cada fase do role tem um "when" na variavel acao (survey do AAP, ou -e acao=...).
+#   precheck   confere SO, proxy do datacenter, VIPs (DNS e portas), NTP e plano de discos (somente leitura)   <- padrao
+#   instalar   precheck + disco, chrony, pacote Logstash, configuracao, servico + usuario de escrita no cluster
+#   pipeline_teste          grava um pipeline simples (1 evento por minuto) e espera o evento chegar ao cluster
+#   pipeline_teste_remover  tira o pipeline de teste e apaga o indice de teste
+#   validar    confere disco, versao, servico, NTP, heap e o login no VIP do Elasticsearch (somente leitura)
+# Survey: acao, es_cluster_nome, elastic_vip.   Segredos: vault.yml.
+# Nao depende do projeto do cluster: so enxerga o cluster pelo VIP do Elasticsearch (443, F5) e pela CA em roles/logstash/files/http_ca.crt.
+
+- name: "Conferir a acao"
+  hosts: logstash
+  connection: local
+  run_once: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.assert:
+        that: acao in ['precheck', 'instalar', 'validar', 'pipeline_teste', 'pipeline_teste_remover']
+        fail_msg: "acao: precheck | instalar | validar | pipeline_teste | pipeline_teste_remover."
+        quiet: true
+
+- name: "Precheck (precheck, instalar)"
+  hosts: logstash
+  gather_facts: "{{ acao in ['precheck', 'instalar'] }}"
+  vars_files: [vault.yml]
+  any_errors_fatal: true        # se UMA VM reprovar, nada e formatado nas outras
+  roles:
+    - role: logstash
+      fase: precheck
+      when: acao in ['precheck', 'instalar']
+
+- name: "Instalar: a primeira VM sozinha, depois as demais"
+  hosts: logstash
+  gather_facts: "{{ acao == 'instalar' }}"
+  vars_files: [vault.yml]
+  serial: [1, "100%"]           # se a primeira falhar, o playbook para antes de tocar nas outras
+  roles:
+    - role: logstash
+      fase: sistema
+      when: acao == 'instalar'
+    - role: logstash
+      fase: pacote
+      when: acao == 'instalar'
+    - role: logstash
+      fase: config
+      when: acao == 'instalar'
+    - role: logstash
+      fase: servico
+      when: acao == 'instalar'
+
+- name: "Instalar: role e usuario de escrita no cluster (uma vez)"
+  hosts: logstash
+  gather_facts: false
+  vars_files: [vault.yml]
+  roles:
+    - role: logstash
+      fase: acesso_es
+      when: acao == 'instalar'
+
+- name: "Validar"
+  hosts: logstash
+  gather_facts: "{{ acao == 'validar' }}"
+  vars_files: [vault.yml]
+  roles:
+    - role: logstash
+      fase: validar
+      when: acao == 'validar'
+
+- name: "Pipeline de teste de comunicacao (pipeline_teste, pipeline_teste_remover)"
+  hosts: logstash
+  gather_facts: false
+  vars_files: [vault.yml]
+  roles:
+    - role: logstash
+      fase: pipeline_teste
+      when: acao == 'pipeline_teste'
+    - role: logstash
+      fase: pipeline_remover
+      when: acao == 'pipeline_teste_remover'

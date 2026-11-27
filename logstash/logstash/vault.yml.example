@@ -1,0 +1,3 @@
+# Copie para vault.yml, preencha e criptografe:  ansible-vault encrypt vault.yml     (NUNCA versione o vault.yml aberto)
+es_elastic_password: "SENHA-DO-USUARIO-elastic-DO-CLUSTER"     # a mesma do vault do cluster; so serve para criar o usuario do Logstash
+logstash_writer_password: "GERAR"                             # openssl rand -hex 24   (senha do usuario logstash_internal, criado pelo playbook)

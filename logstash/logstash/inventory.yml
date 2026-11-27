@@ -1,0 +1,21 @@
+---
+# Somente os servidores e grupos. As variaveis estao em group_vars/. Este inventario e sincronizado no AAP.
+all:
+  children:
+    logstash:                             # 8 Logstash (RHEL 9, 8 vCPU, 16 GB, disco sdb de 512 GB)
+      children:
+        lapa:                             # proxy do datacenter: group_vars/lapa.yml
+          hosts:
+            cbl2am68703: {ansible_host: 10.87.80.12}
+            cbl2am65623: {ansible_host: 10.87.80.13}
+            cbl2am64241: {ansible_host: 10.87.80.15}
+            cbl2am24836: {ansible_host: 10.87.80.16}
+            # cbl2bm25341: {ansible_host: ???}   # estava no inventario antigo, fora do chamado das 8 VMs e sem IP: descomente quando confirmar
+        mackenzie:
+          hosts:
+            cbm2am74841: {ansible_host: 10.87.144.10}
+            cbm2am79112: {ansible_host: 10.87.144.11}
+        campinas:
+          hosts:
+            cbc2am37073: {ansible_host: 10.87.16.10}
+            cbc2am23693: {ansible_host: 10.87.16.11}

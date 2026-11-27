@@ -1,0 +1,51 @@
+---
+# Variaveis de todos os servidores. Proxy por datacenter: lapa.yml, mackenzie.yml, campinas.yml. Segredos: vault.yml (veja vault.yml.example).
+
+# O que executar (survey do AAP, ou -e acao=...): precheck (padrao, so leitura) | instalar | validar | pipeline_teste | pipeline_teste_remover
+acao: precheck
+
+# ------------------------------------------------------------ survey: o cluster que os Logstash vao usar
+es_cluster_nome: ""            # nome do cluster Elasticsearch (ex.: elasticsearch_corp). O playbook confere o nome antes de criar o usuario
+elastic_vip: ""                # nome do VIP do Elasticsearch no F5: destino dos Logstash (use o NOME: o certificado do F5 normalmente so vale para ele)
+
+# Porta do VIP do Elasticsearch no F5 (o F5 recebe na 443 e encaminha aos Hot na 9200)
+elastic_vip_porta: 443
+
+# ------------------------------------------------------------ acesso
+# exec node -> servidores como root. Se o exec node NAO alcanca as VMs direto, informe o bastion (o SSH atravessa ele como tunel).
+ansible_user: root
+bastion_host: ""                                 # ex.: 10.29.148.161
+bastion_user: root
+bastion_key_file: ""                             # vazio = a chave que o exec node ja usa
+ansible_ssh_common_args: >-
+  {{ '' if bastion_host | length == 0 else
+     '-o ProxyCommand="ssh -W %h:%p -q -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null'
+     ~ (' -o IdentitiesOnly=yes -i ' ~ bastion_key_file if bastion_key_file | length > 0 else '')
+     ~ ' ' ~ bastion_user ~ '@' ~ bastion_host ~ '"' }}
+
+# ------------------------------------------------------------ Logstash
+logstash_version: "9.5.5"                        # a mesma do cluster
+logstash_rpm_dir: /root                           # VMs sem Satellite: RPMs do SO (lvm2, xfsprogs, chrony, openssl, versionlock e dependencias) enviados para esta pasta
+logstash_rpm_local: auto                         # auto = tenta o repositorio da Elastic (proxy do datacenter) e, se nao alcancar, usa o RPM de logstash_rpm_dir | true = sempre o RPM local | false = sempre o repositorio
+ntp_server: 10.29.4.200                          # NTP da empresa (se algum datacenter tiver o proprio, sobrescreva no arquivo do datacenter)
+
+# Heap = % da RAM, limitado ao teto (16 GB de RAM -> 6g). Logstash usa memoria fora do heap (buffers de rede, fila).
+logstash_heap_pct: 40
+logstash_heap_max_gb: 8
+logstash_heap_gb: "{{ [[(ansible_facts.memtotal_mb * logstash_heap_pct / 100 / 1024) | int, 1] | max, logstash_heap_max_gb] | min }}"
+
+# Fila persistente (em disco, /var/lib/logstash): nada se perde se o cluster ficar indisponivel ou o servico reiniciar.
+logstash_fila_persistida: true
+logstash_fila_max: 100gb                         # por pipeline; o disco tem 512 GB
+
+# Destino no cluster: o VIP do Elasticsearch (o pool do F5 precisa conter os 8 Hot na 9200)
+logstash_es_hosts: ["https://{{ elastic_vip }}:{{ elastic_vip_porta }}"]
+
+# Usuario de escrita no cluster (criado pelo playbook; a senha e logstash_writer_password do vault.yml)
+logstash_es_user: logstash_internal
+logstash_es_role: logstash_writer
+logstash_indices: ["logstash-*"]                 # AJUSTAR quando definirem nomes de indices / data streams
+
+# Disco de dados: o sdb vira /var/lib/logstash (fila persistente + dead letter queue)
+storage_volumes:
+  - {name: lsdata, vg: vg_lsdata, lv: lv_lsdata, mount: /var/lib/logstash, size_gb: 512, count: 1}

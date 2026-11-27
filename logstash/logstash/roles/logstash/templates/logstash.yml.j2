@@ -1,0 +1,11 @@
+# Gerenciado pelo Ansible (roles/logstash). Pipelines: /etc/logstash/conf.d/*.conf (padrao do pipelines.yml)
+node.name: {{ inventory_hostname.split('.')[0] }}
+path.data: /var/lib/logstash
+path.logs: /var/log/logstash
+{% if logstash_fila_persistida | bool %}
+queue.type: persisted
+queue.max_bytes: {{ logstash_fila_max }}
+{% endif %}
+dead_letter_queue.enable: true
+# API de monitoramento so no localhost (padrao)
+api.http.host: 127.0.0.1

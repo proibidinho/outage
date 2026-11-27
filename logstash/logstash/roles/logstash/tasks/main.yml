@@ -1,0 +1,652 @@
+---
+# ROLE logstash: um arquivo dividido em FASES (variavel "fase", passada pelo site.yml; cada fase tem "when: fase == ...").
+# Fases: acesso_es | precheck | sistema | pacote | config | servico | validar | pipeline_teste | pipeline_remover
+# Configuracao alterada -> notify "reiniciar logstash" (o handler so reinicia se ja existe pipeline).
+
+# ---- FASE acesso_es: role e usuario de escrita no cluster (uma vez, a partir da 1a VM; a CA do cluster ja esta instalada nela) ----
+- name: FASE acesso_es
+  when: fase == 'acesso_es'
+  run_once: true
+  module_defaults:
+    ansible.builtin.uri:
+      url_username: elastic
+      url_password: "{{ es_elastic_password }}"
+      force_basic_auth: true
+      ca_path: /etc/logstash/certs/http_ca.crt
+      use_proxy: false
+      body_format: json
+      return_content: true
+  block:
+    - name: Conferir que o VIP aponta para o cluster certo (antes de criar qualquer coisa)
+      ansible.builtin.uri:
+        url: "{{ logstash_es_hosts[0] }}/"
+        method: GET
+      register: cluster
+      changed_when: false
+
+    - name: Parar se o nome do cluster nao for o da survey
+      ansible.builtin.assert:
+        that: cluster.json.cluster_name == es_cluster_nome
+        fail_msg: "O VIP {{ elastic_vip }} respondeu cluster_name={{ cluster.json.cluster_name | default('?') }}, a survey pediu {{ es_cluster_nome }}. Nada foi criado."
+        quiet: true
+
+    - name: "Role {{ logstash_es_role }} (privilegios recomendados no manual do Logstash)"
+      ansible.builtin.uri:
+        url: "{{ logstash_es_hosts[0] }}/_security/role/{{ logstash_es_role }}"
+        method: PUT
+        body:
+          cluster: [manage_index_templates, monitor, manage_ilm]
+          indices:
+            - names: "{{ logstash_indices }}"
+              privileges: [write, create, create_index, manage, manage_ilm]
+      register: role_es
+      changed_when: role_es.json.role.created | default(false)
+
+    - name: "Usuario {{ logstash_es_user }} (a senha e a do vault; nao aparece no log)"
+      ansible.builtin.uri:
+        url: "{{ logstash_es_hosts[0] }}/_security/user/{{ logstash_es_user }}"
+        method: PUT
+        body:
+          password: "{{ logstash_writer_password }}"
+          roles: ["{{ logstash_es_role }}"]
+          full_name: Logstash (escrita)
+      register: usuario_es
+      changed_when: usuario_es.json.created | default(false)
+      failed_when: false
+      no_log: true          # o corpo da chamada tem a senha; o resultado e conferido na task abaixo
+
+    - name: Conferir a criacao do usuario (mostra o motivo do erro, sem a senha)
+      ansible.builtin.assert:
+        that: usuario_es.status | default(-1) in [200, 201]
+        fail_msg: "Usuario {{ logstash_es_user }} nao foi criado: status {{ usuario_es.status | default('sem resposta') }} {{ usuario_es.msg | default('') }} {{ usuario_es.json | default('') }}"
+        quiet: true
+
+# ---- FASE precheck: SOMENTE LEITURA. Soma erros e avisos e so no fim reprova o host ----
+- name: FASE precheck
+  when: fase == 'precheck'
+  block:
+    - name: Validar a survey e os parametros do projeto (os valores do vault nunca sao exibidos)
+      ansible.builtin.assert:
+        that:
+          - es_cluster_nome is match('^[a-z0-9][a-z0-9_-]*$')
+          - elastic_vip is match('^[A-Za-z0-9][A-Za-z0-9.-]*$')
+          - logstash_version is match('^[0-9]+[.][0-9]+[.][0-9]+$')
+          - (logstash_writer_password | default('')) | length >= 16
+          - (logstash_writer_password | default('')) is not search('^GERAR')
+          - (es_elastic_password | default('')) | length >= 8
+        fail_msg: "Survey: es_cluster_nome (minusculas) e elastic_vip (nome do VIP; o certificado do F5 normalmente so vale para o nome). Vault: logstash_writer_password (>= 16, sem 'GERAR') e es_elastic_password."
+        quiet: true
+      run_once: true
+
+    - name: Certificado da CA http do cluster presente no projeto (roles/logstash/files/http_ca.crt)
+      ansible.builtin.stat:
+        path: "{{ role_path }}/files/http_ca.crt"
+      delegate_to: localhost
+      become: false
+      register: ca_arquivo
+      run_once: true
+
+    - name: Parar se faltar a CA
+      ansible.builtin.assert:
+        that: ca_arquivo.stat.exists
+        fail_msg: "Falta roles/logstash/files/http_ca.crt (copie o /etc/elasticsearch/tls/http_ca.crt de qualquer node do cluster; e publico)."
+        quiet: true
+      run_once: true
+
+    - name: Horario sincronizado? (chrony/NTP)
+      ansible.builtin.command: timedatectl show -p NTPSynchronized --value
+      register: ntp
+      changed_when: false
+      check_mode: false
+
+    - name: Nome curto do servidor (hostname -s)
+      ansible.builtin.command: hostname -s
+      register: hostname_curto
+      changed_when: false
+      check_mode: false
+
+    - name: Ler pacotes instalados (para detectar versao diferente da fixada)
+      ansible.builtin.package_facts:
+        manager: rpm
+
+    - name: Repositorios do sistema operacional habilitados (chrony, lvm2, xfsprogs)
+      ansible.builtin.command: dnf -q repolist --enabled
+      register: repos_so
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Procurar o RPM do Logstash enviado para a VM (quando logstash_rpm_local nao e false)
+      ansible.builtin.find:
+        paths: "{{ logstash_rpm_dir }}"
+        patterns: "logstash-{{ logstash_version }}*.rpm"
+      register: rpm_logstash
+      when: logstash_rpm_local | string | lower != 'false'
+
+    - name: Acesso a artifacts.elastic.co pelo proxy deste datacenter (pulado quando logstash_rpm_local e true)
+      ansible.builtin.uri:
+        url: "https://artifacts.elastic.co/packages/{{ logstash_version.split('.')[0] }}.x/yum/repodata/repomd.xml"
+        method: HEAD
+        timeout: 20
+      environment: "{{ {'https_proxy': logstash_proxy} if logstash_proxy | length > 0 else {} }}"
+      register: repo_elastic
+      failed_when: false
+      check_mode: false
+      when: logstash_rpm_local | string | lower != 'true'
+
+    - name: O VIP do Elasticsearch resolve no DNS deste datacenter?
+      ansible.builtin.shell: "getent ahostsv4 {{ elastic_vip }} | awk '{print $1}' | sort -u | paste -sd, -"
+      args:
+        executable: /bin/bash
+      register: dns_vip
+      changed_when: false
+      check_mode: false
+
+    - name: Alcance do VIP do Elasticsearch (sem proxy; 401 = respondeu, falta so a senha)
+      ansible.builtin.uri:
+        url: "https://{{ elastic_vip }}:{{ elastic_vip_porta }}/"
+        validate_certs: false
+        use_proxy: false
+        timeout: 5
+        status_code: [200, 401, 403]
+      register: vip_teste
+      failed_when: false
+      check_mode: false
+
+    - name: Plano de discos
+      ansible.builtin.include_tasks: plano_disco.yml
+
+    - name: Avaliar os resultados
+      vars:
+        raiz_livre_gb: "{{ ((ansible_facts.mounts | selectattr('mount', 'eq', '/') | first).size_available / 1073741824) | round(1) }}"
+        modo_rpm: "{{ logstash_rpm_local | string | lower }}"
+        repo_ok: "{{ repo_elastic.status | default(0) == 200 }}"
+        rpm_ok: "{{ 'logstash' in ansible_facts.packages or rpm_logstash.matched | default(0) | int > 0 }}"
+        erros: >-
+          {{ ([] if ansible_facts.distribution == 'RedHat' and ansible_facts.distribution_major_version == '9'
+               else ['SO nao suportado: ' ~ ansible_facts.distribution ~ ' ' ~ ansible_facts.distribution_version])
+             + ([] if ansible_facts.architecture == 'x86_64' else ['Arquitetura inesperada: ' ~ ansible_facts.architecture])
+             + ([] if raiz_livre_gb | float >= 5 else ['Menos de 5 GB livres em /: ' ~ raiz_livre_gb ~ ' GB'])
+             + ([] if logstash_proxy | length > 0 else ['logstash_proxy vazio (group_vars do datacenter)'])
+             + ([] if modo_rpm != 'false' or repo_ok | bool
+                 else ['artifacts.elastic.co inacessivel pelo proxy ' ~ logstash_proxy ~ ': ' ~ repo_elastic.msg | default('sem resposta')])
+             + ([] if modo_rpm != 'true' or rpm_ok | bool
+                 else ['RPM logstash-' ~ logstash_version ~ '*.rpm nao encontrado em ' ~ logstash_rpm_dir ~ ' (logstash_rpm_local: true)'])
+             + ([] if modo_rpm != 'auto' or repo_ok | bool or rpm_ok | bool
+                 else ['Nao consegui acessar o repositorio da Elastic pelo proxy ' ~ logstash_proxy ~ ' (' ~ repo_elastic.msg | default('sem resposta')
+                       ~ ') e nao ha RPM local. Baixe logstash-' ~ logstash_version ~ '-x86_64.rpm e envie para ' ~ logstash_rpm_dir ~ ' das VMs'])
+             + ([] if 'logstash' not in ansible_facts.packages
+                 or (ansible_facts.packages['logstash'] | map(attribute='version') | list) == [logstash_version]
+                 else ['logstash ja instalado em versao diferente de ' ~ logstash_version]) }}
+        avisos: >-
+          {{ ([] if dns_vip.stdout | trim | length > 0 else ['DNS nao resolve ' ~ elastic_vip])
+             + ([] if vip_teste.status | default(-1) in [200, 401, 403]
+                 else ['Sem resposta de ' ~ elastic_vip ~ ':' ~ elastic_vip_porta ~ ' (chamado de portas aberto?). Necessario antes de usar o Logstash'])
+             + ([] if modo_rpm != 'auto' or repo_ok | bool or not rpm_ok | bool
+                 else ['Repositorio da Elastic inacessivel: o Logstash sera instalado pelo RPM de ' ~ logstash_rpm_dir])
+             + ([] if ntp.stdout | trim == 'yes' else ['Relogio nao sincronizado (timedatectl NTPSynchronized != yes); o chrony sera configurado na fase sistema'])
+             + ([] if hostname_curto.stdout | trim | lower == inventory_hostname.split('.')[0] | lower
+                 else ['hostname -s (' ~ hostname_curto.stdout | trim ~ ') difere do inventario (' ~ inventory_hostname ~ ')'])
+             + ([] if ansible_facts.distribution_version == '9.5' else ['RHEL ' ~ ansible_facts.distribution_version ~ ' (homologado: 9.5)'])
+             + ([] if repos_so.stdout_lines | length > 1 else ['Nenhum repositorio do SO habilitado: dnf nao achara chrony/lvm2/xfsprogs'])
+             + ([] if ansible_facts.processor_vcpus | int >= 4 else ['Menos de 4 vCPUs: ' ~ ansible_facts.processor_vcpus])
+             + ([] if ansible_facts.memtotal_mb | int >= 12000 else ['Menos de 12 GB de RAM: ' ~ ansible_facts.memtotal_mb ~ ' MB']) }}
+      ansible.builtin.debug:
+        msg:
+          servidor: "{{ inventory_hostname }} ({{ ansible_host }})"
+          recursos: "{{ ansible_facts.processor_vcpus }} vCPU, {{ ansible_facts.memtotal_mb }} MB de RAM, heap calculado {{ logstash_heap_gb }}g"
+          proxy: "{{ logstash_proxy }}"
+          erros: "{{ erros }}"
+          avisos: "{{ avisos }}"
+      register: resultado
+
+    - name: Reprovar o servidor se houver erros
+      ansible.builtin.assert:
+        that: resultado.msg.erros | length == 0
+        fail_msg: "PRECHECK REPROVADO em {{ inventory_hostname }}: {{ resultado.msg.erros }}"
+        success_msg: "Precheck aprovado em {{ inventory_hostname }}"
+
+# ---- FASE sistema: pacotes base, chrony e disco de dados (LVM + XFS em /var/lib/logstash) ----
+- name: FASE sistema
+  when: fase == 'sistema'
+  block:
+    - name: Plano de discos (confere antes de formatar)
+      ansible.builtin.include_tasks: plano_disco.yml
+
+    # Sem Satellite: os RPMs ficam em logstash_rpm_dir (ex.: /root) e sao instalados juntos, sem consultar repositorios (disablerepo).
+    - name: Procurar os RPMs enviados para a VM
+      ansible.builtin.find:
+        paths: "{{ logstash_rpm_dir }}"
+        patterns: "*.rpm"
+      register: rpms_locais
+
+    - name: Instalar os RPMs locais (dnf resolve as dependencias entre eles; nao usa o Satellite)
+      ansible.builtin.dnf:
+        name: "{{ rpms_locais.files | map(attribute='path') | list }}"
+        state: present
+        disablerepo: "*"
+      when: rpms_locais.matched | int > 0
+
+    - name: Ler pacotes instalados
+      ansible.builtin.package_facts:
+        manager: rpm
+
+    - name: Parar se faltar algum pacote base
+      vars:
+        faltam: "{{ ['lvm2', 'xfsprogs', 'chrony', 'openssl', 'python3-dnf-plugin-versionlock'] | difference(ansible_facts.packages.keys() | list) }}"
+      ansible.builtin.assert:
+        that: faltam | length == 0
+        fail_msg: "{{ inventory_hostname }}: faltam os pacotes {{ faltam }}. Envie os RPMs (e as dependencias) para {{ logstash_rpm_dir }}."
+        quiet: true
+
+    - name: Criar cada volume (passos em volume.yml)
+      ansible.builtin.include_tasks: volume.yml
+      loop: "{{ volumes_pendentes }}"
+      loop_control:
+        label: "{{ item.mount }}"
+
+    - name: Chrony - desativar as outras fontes de tempo (pool e server que nao sejam o NTP da empresa)
+      ansible.builtin.replace:
+        path: /etc/chrony.conf
+        regexp: '^((?:pool|server) (?!{{ ntp_server | regex_escape }} ).*)$'
+        replace: '# desativado-por-ansible: \1'
+      register: chrony_pool
+
+    - name: Chrony - servidor NTP da empresa
+      ansible.builtin.lineinfile:
+        path: /etc/chrony.conf
+        regexp: '^server {{ ntp_server | regex_escape }} '
+        line: "server {{ ntp_server }} iburst"
+      register: chrony_server
+
+    - name: Garantir chronyd habilitado e ativo
+      ansible.builtin.systemd_service:
+        name: chronyd
+        state: "{{ 'restarted' if (chrony_pool is changed or chrony_server is changed) else 'started' }}"
+        enabled: true
+
+    - name: Acertar o relogio agora (so se o chrony foi reconfigurado)
+      ansible.builtin.command: chronyc makestep
+      when: chrony_pool is changed or chrony_server is changed
+      changed_when: true
+
+# ---- FASE pacote: RPM fixado na versao do cluster, repo desabilitado, versionlock; nunca faz upgrade/downgrade ----
+- name: FASE pacote
+  when: fase == 'pacote'
+  vars:
+    proxy_env: "{{ {'https_proxy': logstash_proxy} if logstash_proxy | length > 0 else {} }}"
+  block:
+    - name: Testar o acesso a artifacts.elastic.co pelo proxy (so quando logstash_rpm_local e auto)
+      ansible.builtin.uri:
+        url: "https://artifacts.elastic.co/packages/{{ logstash_version.split('.')[0] }}.x/yum/repodata/repomd.xml"
+        method: HEAD
+        timeout: 20
+      environment: "{{ proxy_env }}"
+      register: repo_pacote
+      failed_when: false
+      when: logstash_rpm_local | string | lower == 'auto'
+
+    - name: Definir se o Logstash vem do repositorio ou do RPM local
+      ansible.builtin.set_fact:
+        usar_rpm_local: "{{ logstash_rpm_local | string | lower == 'true' or (logstash_rpm_local | string | lower == 'auto' and repo_pacote.status | default(0) != 200) }}"
+
+    - name: Importar a chave GPG oficial da Elastic (fingerprint conferido)
+      ansible.builtin.rpm_key:
+        key: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+        fingerprint: "46095ACC8548582C1A2699A9D27D666CD88E42B4"
+        state: present
+      environment: "{{ proxy_env }}"
+      when: not usar_rpm_local | bool
+
+    - name: Configurar o repositorio da Elastic (desabilitado por padrao; proxy do datacenter)
+      ansible.builtin.yum_repository:
+        name: elasticsearch
+        description: "Elastic repository for {{ logstash_version.split('.')[0] }}.x packages"
+        baseurl: "https://artifacts.elastic.co/packages/{{ logstash_version.split('.')[0] }}.x/yum"
+        gpgcheck: true
+        gpgkey: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+        enabled: false
+        proxy: "{{ logstash_proxy if logstash_proxy | length > 0 else omit }}"
+      when: not usar_rpm_local | bool
+
+    - name: Ler pacotes ja instalados
+      ansible.builtin.package_facts:
+        manager: rpm
+
+    - name: Parar se ja houver OUTRA versao instalada (o projeto nao faz upgrade/downgrade)
+      ansible.builtin.assert:
+        that: (ansible_facts.packages['logstash'] | map(attribute='version') | list) == [logstash_version]
+        fail_msg: "logstash ja instalado em outra versao que nao {{ logstash_version }}. Trate como mudanca planejada."
+        quiet: true
+      when: "'logstash' in ansible_facts.packages"
+
+    - name: "Instalar o Logstash na versao fixada"
+      ansible.builtin.dnf:
+        name: "logstash-{{ logstash_version }}"
+        enablerepo: elasticsearch
+        disablerepo: "*"              # so o repositorio da Elastic (pelo proxy); o Satellite fica de fora
+        state: present
+        disable_gpg_check: false
+      environment: "{{ proxy_env }}"
+      when: not usar_rpm_local | bool
+
+    - name: Conferir o Logstash instalado a partir do RPM local (a fase sistema instalou os RPMs de logstash_rpm_dir)
+      ansible.builtin.assert:
+        that:
+          - "'logstash' in ansible_facts.packages"
+          - (ansible_facts.packages['logstash'] | map(attribute='version') | list) == [logstash_version]
+        fail_msg: "{{ inventory_hostname }}: nao consegui acessar o repositorio da Elastic (ou logstash_rpm_local e true) e logstash-{{ logstash_version }} nao esta instalado. Baixe o RPM e envie para {{ logstash_rpm_dir }} das VMs."
+        quiet: true
+      when: usar_rpm_local | bool
+
+    - name: Travar a versao (dnf versionlock)
+      ansible.builtin.shell: |
+        if dnf -q --disablerepo='*' versionlock list 2>/dev/null | grep -q "^logstash-.*{{ logstash_version }}"; then
+          echo JA_EXISTIA
+        else
+          dnf -q --disablerepo='*' versionlock add logstash-{{ logstash_version }} && echo ADICIONADO
+        fi
+      args:
+        executable: /bin/bash
+      register: trava
+      changed_when: "'ADICIONADO' in trava.stdout"
+
+# ---- FASE config: heap, logstash.yml, CA do cluster, credencial, dependencia do disco e exemplo de saida ----
+- name: FASE config
+  when: fase == 'config'
+  block:
+    - name: Dono do disco de dados (o ponto de montagem nasce como root)
+      ansible.builtin.file:
+        path: /var/lib/logstash
+        state: directory
+        owner: logstash
+        group: logstash
+        mode: "0755"
+
+    - name: Heap da JVM (-Xms e -Xmx iguais)
+      ansible.builtin.lineinfile:
+        path: /etc/logstash/jvm.options
+        regexp: "^{{ item }}"
+        line: "{{ item }}{{ logstash_heap_gb }}g"
+      loop: ["-Xms", "-Xmx"]
+      notify: reiniciar logstash
+
+    - name: Configuracao principal (logstash.yml)
+      ansible.builtin.template:
+        src: logstash.yml.j2
+        dest: /etc/logstash/logstash.yml
+        owner: root
+        group: logstash
+        mode: "0640"
+      notify: reiniciar logstash
+
+    - name: Pasta de ajustes do servico logstash
+      ansible.builtin.file:
+        path: /etc/systemd/system/logstash.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: O servico so sobe depois que o disco de dados monta
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/logstash.service.d/override.conf
+        content: |
+          [Unit]
+          RequiresMountsFor=/var/lib/logstash
+        owner: root
+        group: root
+        mode: "0644"
+      register: override
+
+    - name: Pasta de certificados do Logstash
+      ansible.builtin.file:
+        path: /etc/logstash/certs
+        state: directory
+        owner: root
+        group: logstash
+        mode: "0750"
+
+    - name: Instalar a CA http do cluster (o Logstash valida o certificado do VIP com ela)
+      ansible.builtin.copy:
+        src: http_ca.crt
+        dest: /etc/logstash/certs/http_ca.crt
+        owner: root
+        group: logstash
+        mode: "0644"
+      notify: reiniciar logstash
+
+    - name: Credencial de escrita no cluster (variaveis ES_USER e ES_PWD do servico; arquivo so do root)
+      ansible.builtin.lineinfile:
+        path: /etc/sysconfig/logstash
+        regexp: "^{{ item.chave }}="
+        line: "{{ item.chave }}={{ item.valor }}"
+        create: true
+        owner: root
+        group: root
+        mode: "0600"
+      loop:
+        - {chave: ES_USER, valor: "{{ logstash_es_user }}"}
+        - {chave: ES_PWD, valor: "{{ logstash_writer_password }}"}
+      loop_control:
+        label: "{{ item.chave }}"
+      no_log: true
+      notify: reiniciar logstash
+
+    - name: Exemplo de saida para o cluster (fora do conf.d, nao e carregado)
+      ansible.builtin.template:
+        src: saida-elasticsearch.conf.j2
+        dest: /etc/logstash/saida-elasticsearch.conf.exemplo
+        owner: root
+        group: logstash
+        mode: "0640"
+
+    - name: Ja existe pipeline? (arquivos .conf em /etc/logstash/conf.d)
+      ansible.builtin.find:
+        paths: /etc/logstash/conf.d
+        patterns: "*.conf"
+      register: pipelines
+
+    - name: Guardar se existe pipeline
+      ansible.builtin.set_fact:
+        logstash_tem_pipeline: "{{ pipelines.matched | int > 0 }}"
+
+    - name: Recarregar o systemd se a unidade mudou
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: override is changed
+
+    - name: Aplicar agora os reinicios pendentes
+      ansible.builtin.meta: flush_handlers
+
+# ---- FASE servico: habilita no boot; so inicia se ja existe pipeline (sem pipeline o Logstash encerra sozinho) ----
+- name: FASE servico
+  when: fase == 'servico'
+  block:
+    - name: Ja existe pipeline?
+      ansible.builtin.find:
+        paths: /etc/logstash/conf.d
+        patterns: "*.conf"
+      register: pipelines
+
+    - name: Habilitar no boot (e iniciar se houver pipeline)
+      ansible.builtin.systemd_service:
+        name: logstash
+        enabled: true
+        state: "{{ 'started' if pipelines.matched | int > 0 else omit }}"
+
+    - name: Avisar que o servico esta parado por falta de pipeline
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: sem pipeline em /etc/logstash/conf.d, servico habilitado mas PARADO (esperado enquanto as entradas nao estao definidas). Exemplo de saida: /etc/logstash/saida-elasticsearch.conf.exemplo"
+      when: pipelines.matched | int == 0
+
+# ---- FASE pipeline_teste: pipeline simples so para testar a comunicacao (1 evento por minuto, indice logstash-teste-comunicacao) ----
+- name: FASE pipeline_teste
+  when: fase == 'pipeline_teste'
+  block:
+    - name: Gravar o pipeline de teste em /etc/logstash/conf.d
+      ansible.builtin.template:
+        src: pipeline-teste.conf.j2
+        dest: /etc/logstash/conf.d/teste-comunicacao.conf
+        owner: root
+        group: logstash
+        mode: "0640"
+      register: pipeline_arquivo
+
+    - name: Iniciar o Logstash (reinicia se o pipeline mudou)
+      ansible.builtin.systemd_service:
+        name: logstash
+        enabled: true
+        state: "{{ 'restarted' if pipeline_arquivo is changed else 'started' }}"
+
+    - name: Esperar o evento desta VM aparecer no cluster (ate 5 minutos)
+      ansible.builtin.uri:
+        url: "{{ logstash_es_hosts[0] }}/logstash-teste-comunicacao/_count"
+        method: POST
+        url_username: elastic
+        url_password: "{{ es_elastic_password }}"
+        force_basic_auth: true
+        ca_path: /etc/logstash/certs/http_ca.crt
+        use_proxy: false
+        body_format: json
+        body:
+          query:
+            match_phrase:
+              message: "teste de comunicacao {{ inventory_hostname }}"
+        status_code: [200, 404]
+        return_content: true
+      register: contagem
+      until: contagem.json.count | default(0) | int > 0
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Resultado
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: comunicacao OK, {{ contagem.json.count }} evento(s) no indice logstash-teste-comunicacao. Para tirar o pipeline: acao=pipeline_teste_remover"
+
+# ---- FASE pipeline_remover: tira o pipeline de teste e apaga o indice de teste ----
+- name: FASE pipeline_remover
+  when: fase == 'pipeline_remover'
+  block:
+    - name: Apagar o pipeline de teste
+      ansible.builtin.file:
+        path: /etc/logstash/conf.d/teste-comunicacao.conf
+        state: absent
+      register: pipeline_apagado
+
+    - name: Ainda existe algum outro pipeline?
+      ansible.builtin.find:
+        paths: /etc/logstash/conf.d
+        patterns: "*.conf"
+      register: restantes
+
+    - name: Parar o Logstash se nao sobrou pipeline (ele encerraria sozinho); senao reiniciar
+      ansible.builtin.systemd_service:
+        name: logstash
+        state: "{{ 'stopped' if restantes.matched | int == 0 else 'restarted' }}"
+      when: pipeline_apagado is changed
+
+    - name: Apagar o indice de teste no cluster (uma vez)
+      ansible.builtin.uri:
+        url: "{{ logstash_es_hosts[0] }}/logstash-teste-comunicacao"
+        method: DELETE
+        url_username: elastic
+        url_password: "{{ es_elastic_password }}"
+        force_basic_auth: true
+        ca_path: /etc/logstash/certs/http_ca.crt
+        use_proxy: false
+        status_code: [200, 404]
+      run_once: true
+      changed_when: false
+
+# ---- FASE validar: SOMENTE LEITURA ----
+- name: FASE validar
+  when: fase == 'validar'
+  block:
+    - name: Tipo de filesystem do disco de dados
+      ansible.builtin.command: "findmnt -n -o FSTYPE {{ item.mount }}"
+      loop: "{{ storage_volumes }}"
+      loop_control:
+        label: "{{ item.mount }}"
+      register: fs
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Ler pacotes instalados
+      ansible.builtin.package_facts:
+        manager: rpm
+
+    - name: Estado do servico
+      ansible.builtin.shell: "echo \"$(systemctl is-enabled logstash 2>&1)|$(systemctl is-active logstash 2>&1)\""
+      register: servico
+      changed_when: false
+      check_mode: false
+
+    - name: Relogio sincronizado e heap gravado
+      ansible.builtin.shell: |
+        echo "ntp=$(timedatectl show -p NTPSynchronized --value)"
+        echo "xmx=$(sed -n 's/^-Xmx//p' /etc/logstash/jvm.options)"
+        echo "pipelines=$(ls /etc/logstash/conf.d/*.conf 2>/dev/null | wc -l)"
+      args:
+        executable: /bin/bash
+      register: estado
+      changed_when: false
+      check_mode: false
+
+    - name: Autenticar no VIP do Elasticsearch com o usuario do Logstash e a CA do cluster (sem proxy)
+      ansible.builtin.uri:
+        url: "{{ item }}/_security/_authenticate"
+        url_username: "{{ logstash_es_user }}"
+        url_password: "{{ logstash_writer_password }}"
+        force_basic_auth: true
+        ca_path: /etc/logstash/certs/http_ca.crt
+        use_proxy: false
+        timeout: 10
+        return_content: true
+      loop: "{{ logstash_es_hosts }}"
+      register: auth_es
+      failed_when: false
+      changed_when: false
+      check_mode: false
+
+    - name: Nome do cluster que esta atras do VIP
+      ansible.builtin.uri:
+        url: "{{ logstash_es_hosts[0] }}/"
+        url_username: "{{ logstash_es_user }}"
+        url_password: "{{ logstash_writer_password }}"
+        force_basic_auth: true
+        ca_path: /etc/logstash/certs/http_ca.crt
+        use_proxy: false
+        timeout: 10
+        return_content: true
+      register: cluster
+      failed_when: false
+      changed_when: false
+      check_mode: false
+
+    - name: Conferir
+      vars:
+        e: "{{ dict(estado.stdout_lines | map('split', '=', 1)) }}"
+        vip_ruim: >-
+          {%- set r = [] -%}
+          {%- for a in auth_es.results if a.status | default(-1) != 200 or a.json.username | default('') != logstash_es_user -%}
+          {%-   set _ = r.append(a.item) -%}
+          {%- endfor -%}
+          {{ r }}
+      ansible.builtin.assert:
+        that:
+          - (storage_volumes | length) == 0 or fs.results | map(attribute='stdout') | unique | list == ['xfs']
+          - "'logstash' in ansible_facts.packages"
+          - (ansible_facts.packages['logstash'] | map(attribute='version') | list) == [logstash_version]
+          - servico.stdout.split('|')[0] == 'enabled'
+          - e.pipelines | int == 0 or servico.stdout.split('|')[1] == 'active'
+          - e.ntp == 'yes'
+          - e.xmx == logstash_heap_gb ~ 'g'
+          - vip_ruim | length == 0
+          - cluster.json.cluster_name | default('') == es_cluster_nome
+        fail_msg: >-
+          {{ inventory_hostname }}: disco={{ fs.results | map(attribute='stdout') | list }} servico(enabled|active)={{ servico.stdout }}
+          estado={{ e }} heap_esperado={{ logstash_heap_gb }}g login ok no VIP={{ vip_ruim | length == 0 }} (status {{ auth_es.results[0].status | default('sem resposta') }} {{ auth_es.results[0].msg | default('') }}) cluster={{ cluster.json.cluster_name | default('?') }} (survey: {{ es_cluster_nome }})
+        success_msg: "{{ inventory_hostname }}: ok (servico {{ servico.stdout }}, pipelines {{ e.pipelines }})"
